@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChangelogDialog } from "./changelog-dialog";
 import { Button } from "@/components/ui/button";
+import { APP_BUILD_NUMBER, APP_DISPLAY_NAME } from "@/lib/app-edition";
 
 interface AboutDialogProps {
   version: string;
@@ -87,39 +88,40 @@ export function AboutDialog({ version, onClose }: AboutDialogProps) {
       <div className="bg-card rounded-lg border shadow-xl p-6 max-w-xs w-full mx-4 text-center animate-in fade-in zoom-in-95 duration-200">
         <img
           src="/icon.png"
-          alt="OpenUsage"
+          alt={APP_DISPLAY_NAME}
           className="w-16 h-16 mx-auto mb-3 rounded-xl"
         />
 
-        <h2 className="text-xl font-semibold mb-1">OpenUsage</h2>
+        <h2 className="text-xl font-semibold mb-1">{APP_DISPLAY_NAME}</h2>
 
         <div className="flex flex-col items-center gap-2 mb-4">
           <span className="inline-block text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
             v{version}
           </span>
+          {APP_BUILD_NUMBER && <span className="text-xs text-muted-foreground">建置 {APP_BUILD_NUMBER}</span>}
           <Button
             size="xs"
             variant="outline"
             onClick={() => setView("changelog")}
             className="text-[10px] h-5 px-1.5"
           >
-            View Changelog
+            查看更新紀錄
           </Button>
         </div>
 
         <div className="text-sm text-muted-foreground space-y-1">
           <p>
-            Built by{" "}
+            原作者：{" "}
             <ExternalLink href="https://itsbyrob.in/x">Robin Ebers</ExternalLink>
           </p>
           <p>
-            Open source on{" "}
+            開放原始碼：{" "}
             <ExternalLink href="https://github.com/robinebers/openusage">
               GitHub
             </ExternalLink>
           </p>
           <p className="text-xs pt-1">
-            Maintainers:{" "}
+            維護者：{" "}
             <ExternalLink href="https://github.com/validatedev">
               validatedev
             </ExternalLink>
@@ -133,4 +135,3 @@ export function AboutDialog({ version, onClose }: AboutDialogProps) {
     </div>
   );
 }
-

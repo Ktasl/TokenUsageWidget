@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener"
 import { X } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { IS_TEST_BUILD } from "@/lib/app-edition"
 import {
   loadRetirementNoticeDismissedAt,
   saveRetirementNoticeDismissedAt,
@@ -15,6 +16,7 @@ export function RetirementNotice() {
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
+    if (IS_TEST_BUILD) return
     let isMounted = true
 
     const evaluate = async () => {
@@ -37,7 +39,7 @@ export function RetirementNotice() {
     }
   }, [])
 
-  if (!visible) return null
+  if (IS_TEST_BUILD || !visible) return null
 
   const handleGetNewApp = () => {
     openUrl(NEW_APP_URL).catch(console.error)

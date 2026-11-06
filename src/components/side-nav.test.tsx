@@ -23,14 +23,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 }))
 
 describe("SideNav", () => {
-  it("calls onViewChange for Home and Settings", async () => {
+  it("calls onViewChange for 總覽 and 設定", async () => {
     const onViewChange = vi.fn()
     render(<SideNav activeView="home" onViewChange={onViewChange} plugins={[]} />)
 
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }))
+    await userEvent.click(screen.getByRole("button", { name: "設定" }))
     expect(onViewChange).toHaveBeenCalledWith("settings")
 
-    await userEvent.click(screen.getByRole("button", { name: "Home" }))
+    await userEvent.click(screen.getByRole("button", { name: "總覽" }))
     expect(onViewChange).toHaveBeenCalledWith("home")
   })
 
@@ -81,11 +81,11 @@ describe("SideNav", () => {
     expect(p2Style).toContain("rgb(255, 255, 255)")
   })
 
-  it("opens the issues page and hides the panel from Help", async () => {
+  it("opens the issues page and hides the panel from 說明", async () => {
     const onViewChange = vi.fn()
     render(<SideNav activeView="home" onViewChange={onViewChange} plugins={[]} />)
 
-    await userEvent.click(screen.getByRole("button", { name: "Help" }))
+    await userEvent.click(screen.getByRole("button", { name: "說明" }))
 
     expect(openUrl).toHaveBeenCalledWith("https://github.com/robinebers/openusage/issues")
     expect(invoke).toHaveBeenCalledWith("hide_panel")

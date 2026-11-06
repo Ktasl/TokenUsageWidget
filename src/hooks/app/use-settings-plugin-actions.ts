@@ -88,8 +88,26 @@ export function useSettingsPluginActions({
     startBatch,
   ])
 
+  const handleMetricChange = useCallback((id: string, label: string) => {
+    if (!pluginSettings) return
+    const menubarMetrics = { ...pluginSettings.menubarMetrics }
+    if (label) menubarMetrics[id] = label
+    else delete menubarMetrics[id]
+    const { menubarMetrics: _previous, ...base } = pluginSettings
+    const nextSettings: PluginSettings = {
+      ...base,
+      ...(Object.keys(menubarMetrics).length > 0 ? { menubarMetrics } : {}),
+    }
+    setPluginSettings(nextSettings)
+    scheduleTrayIconUpdate("settings", 0)
+    void savePluginSettings(nextSettings).catch((error) => {
+      console.error("Failed to save plugin metric:", error)
+    })
+  }, [pluginSettings, scheduleTrayIconUpdate, setPluginSettings])
+
   return {
     handleReorder,
     handleToggle,
+    handleMetricChange,
   }
 }

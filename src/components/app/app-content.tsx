@@ -28,6 +28,7 @@ export type AppContentActionProps = {
   onRetryPlugin: (id: string) => void
   onReorder: (orderedIds: string[]) => void
   onToggle: (id: string) => void
+  onMetricChange?: (id: string, label: string) => void
   onAutoUpdateIntervalChange: (value: AutoUpdateIntervalMinutes) => void
   onThemeModeChange: (mode: ThemeMode) => void
   onDisplayModeChange: (mode: DisplayMode) => void
@@ -50,6 +51,7 @@ export function AppContent({
   onRetryPlugin,
   onReorder,
   onToggle,
+  onMetricChange,
   onAutoUpdateIntervalChange,
   onThemeModeChange,
   onDisplayModeChange,
@@ -62,9 +64,10 @@ export function AppContent({
   onGlobalShortcutChange,
   onStartOnLoginChange,
 }: AppContentProps) {
-  const { activeView } = useAppUiStore(
+  const { activeView, setActiveView } = useAppUiStore(
     useShallow((state) => ({
       activeView: state.activeView,
+      setActiveView: state.setActiveView,
     }))
   )
 
@@ -96,6 +99,7 @@ export function AppContent({
     return (
       <OverviewPage
         plugins={displayPlugins}
+        onOpenSettings={() => setActiveView("settings")}
         onRetryPlugin={onRetryPlugin}
         displayMode={displayMode}
         resetTimerDisplayMode={resetTimerDisplayMode}
@@ -111,6 +115,7 @@ export function AppContent({
         plugins={settingsPlugins}
         onReorder={onReorder}
         onToggle={onToggle}
+        onMetricChange={onMetricChange}
         autoUpdateInterval={autoUpdateInterval}
         onAutoUpdateIntervalChange={onAutoUpdateIntervalChange}
         themeMode={themeMode}

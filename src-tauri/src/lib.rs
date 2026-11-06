@@ -5,7 +5,17 @@ mod local_http_api;
 mod log_path;
 mod panel;
 mod plugin_engine;
+mod probe_completion;
 mod tray;
+mod usage_export;
+mod background_refresh;
+mod menubar_summary;
+
+/// Debug-only synthetic bitmap verification; never starts the app or providers.
+#[cfg(all(target_os = "macos", debug_assertions))]
+pub fn render_menubar_synthetic_preview(path: &std::path::Path) -> Result<(), String> {
+    menubar_summary::render_synthetic_preview(path)
+}
 #[cfg(target_os = "macos")]
 mod webkit_config;
 
@@ -203,6 +213,11 @@ fn init_panel(app_handle: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn reposition_panel(app_handle: tauri::AppHandle) {
+    panel::position_panel_from_tray(&app_handle);
+}
+
+#[tauri::command]
 fn hide_panel(app_handle: tauri::AppHandle) {
     use tauri_nspanel::ManagerExt;
     if let Ok(panel) = app_handle.get_webview_panel("main") {
@@ -272,6 +287,8 @@ async fn start_probe_batch(
         .map(|plugin| plugin.manifest.id.clone())
         .collect();
 
+    let generation = probe_completion::generations().register(&response_plugin_ids);
+
     log::info!(
         "probe batch {} starting: {:?}",
         batch_id,
@@ -331,37 +348,46 @@ async fn start_probe_batch(
                 };
 
                 let plugin_id = plugin.manifest.id.clone();
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let output = probe_completion::run_safely(&plugin, || {
                     plugin_engine::runtime::run_probe(&plugin, &data_dir, &version)
-                }));
-
-                match result {
-                    Ok(output) => {
-                        let has_error = output.lines.iter().any(|line| {
-                            matches!(line, plugin_engine::runtime::MetricLine::Badge { label, .. } if label == "Error")
-                        });
-                        if has_error {
-                            log::warn!("probe {} completed with error", plugin_id);
-                        } else {
-                            log::info!(
-                                "probe {} completed ok ({} lines)",
-                                plugin_id,
-                                output.lines.len()
-                            );
-                            local_http_api::cache_successful_output(&output);
-                        }
-                        let _ = handle.emit(
+                });
+                let has_error = output.lines.iter().any(|line| {
+                    matches!(line, plugin_engine::runtime::MetricLine::Badge { label, .. } if label == "Error")
+                });
+                if has_error {
+                    log::warn!("probe {} completed with error", plugin_id);
+                } else {
+                    log::info!(
+                        "probe {} completed ok ({} lines)",
+                        plugin_id,
+                        output.lines.len()
+                    );
+                }
+                // Cache and event publication share generation ownership. Sending
+                // a superseded success would let the renderer timestamp old data
+                // after a newer background snapshot that arrived while pending.
+                let published = probe_completion::generations().commit_if_current(&plugin_id, generation, || {
+                    if !has_error {
+                        local_http_api::cache_successful_output(&output);
+                        background_refresh::remember(&handle, &output);
+                    } else {
+                        menubar_summary::mark_error(&handle, &plugin_id);
+                    }
+                    if handle
+                        .emit(
                             "probe:result",
                             ProbeResult {
                                 batch_id: bid.clone(),
                                 output,
                             },
-                        );
+                        )
+                        .is_err()
+                    {
+                        // Do not include serialized output or the emitter error in logs.
+                        log::error!("probe result delivery failed");
                     }
-                    Err(_) => {
-                        log::error!("probe {} panicked", plugin_id);
-                    }
-                }
+                });
+                if !published { log::info!("superseded probe result was not published"); }
 
                 if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
                     log::info!("probe batch {} complete", completion_bid);
@@ -509,8 +535,16 @@ pub fn run() {
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
     let _guard = runtime.enter();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_aptabase::Builder::new("A-US-6435241436").build())
+    let context = tauri::generate_context!();
+    let test_build = context.config().identifier == "io.github.ktasl.tokenusagewidget.test";
+    let builder = tauri::Builder::default();
+    let builder = if test_build {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_aptabase::Builder::new("A-US-6435241436").build())
+    };
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -531,17 +565,27 @@ pub fn run() {
         )
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_autostart::Builder::new().build())
+        .plugin(tauri_plugin_autostart::Builder::new()
+            .app_name(if test_build { "TokenUsageWidget" } else { "OpenUsage" })
+            .build())
         .invoke_handler(tauri::generate_handler![
             init_panel,
+            reposition_panel,
             hide_panel,
             open_devtools,
             start_probe_batch,
             list_plugins,
             get_log_path,
             update_global_shortcut
+            ,panel::configure_desktop_widget
+            ,panel::get_desktop_widget_state
+            ,usage_export::save_usage_export
+            ,background_refresh::configure_background_refresh
+            ,background_refresh::get_background_usage
+            ,menubar_summary::configure_menubar_summary
+            ,menubar_summary::get_menubar_summary
         ])
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
@@ -554,14 +598,16 @@ pub fn run() {
             use tauri::Manager;
 
             let version = app.package_info().version.to_string();
-            log::info!("OpenUsage v{} starting", version);
+            log::info!("{} v{} starting", app.package_info().name, version);
 
             // Load config early (lazy init via OnceLock, zero-cost after)
-            let _proxy = config::get_resolved_proxy();
+            config::initialize(if test_build { ".tokenusagewidget-test" } else { ".openusage" });
 
-            track_daily_active_if_needed(app.handle());
-            #[cfg(desktop)]
-            spawn_daily_active_rollover_tracker(app.handle().clone());
+            if !test_build {
+                track_daily_active_if_needed(app.handle());
+                #[cfg(desktop)]
+                spawn_daily_active_rollover_tracker(app.handle().clone());
+            }
 
             let app_data_dir = app.path().app_data_dir().expect("no app data dir");
             let resource_dir = app.path().resource_dir().expect("no resource dir");
@@ -587,12 +633,16 @@ pub fn run() {
             }));
 
             local_http_api::init(&app_data_dir, known_plugin_ids);
-            local_http_api::start_server();
+            if !test_build {
+                local_http_api::start_server();
+            }
 
             tray::create(app.handle())?;
 
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            if !test_build {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
 
             // Register global shortcut from stored settings
             #[cfg(desktop)]
@@ -628,7 +678,7 @@ pub fn run() {
 
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|_, event| match event {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {

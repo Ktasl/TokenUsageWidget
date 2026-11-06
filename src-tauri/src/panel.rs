@@ -1,7 +1,75 @@
+use tauri::Emitter;
 use tauri::{AppHandle, Manager, Position, Size};
 use tauri_nspanel::{
     CollectionBehavior, ManagerExt, PanelLevel, StyleMask, WebviewWindowExt, tauri_panel,
 };
+
+#[derive(Clone, Copy, Default, serde::Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopWidgetState {
+    pub pinned: bool,
+    pub click_through: bool,
+}
+
+// Never persist click-through mode: every launch has a reachable interactive panel.
+static DESKTOP_MODE: std::sync::Mutex<DesktopWidgetState> =
+    std::sync::Mutex::new(DesktopWidgetState { pinned: false, click_through: false });
+
+fn requested_mode(pinned: bool, click_through: bool) -> Result<DesktopWidgetState, String> {
+    if click_through && !pinned {
+        return Err("請先釘選桌面，再啟用滑鼠穿透".into());
+    }
+    Ok(DesktopWidgetState { pinned, click_through })
+}
+
+pub fn desktop_widget_state() -> DesktopWidgetState {
+    *DESKTOP_MODE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[tauri::command]
+pub fn get_desktop_widget_state() -> DesktopWidgetState {
+    desktop_widget_state()
+}
+
+fn apply_desktop_mode(app_handle: &AppHandle, mode: DesktopWidgetState) -> Result<DesktopWidgetState, String> {
+    // This function only runs on AppKit's main thread.
+    if objc2_foundation::MainThreadMarker::new().is_none() {
+        return Err("無法在目前執行緒調整桌面浮窗".into());
+    }
+    init(app_handle).map_err(|_| "無法準備桌面浮窗".to_string())?;
+    let panel = app_handle.get_webview_panel("main").map_err(|_| "無法取得桌面浮窗".to_string())?;
+    *DESKTOP_MODE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = mode;
+    panel.set_hides_on_deactivate(false);
+    panel.set_movable_by_window_background(mode.pinned);
+    panel.set_ignores_mouse_events(mode.click_through);
+    panel.set_level(if mode.pinned { PanelLevel::Floating.value() } else { PanelLevel::MainMenu.value() + 1 });
+    if mode.click_through {
+        panel.order_front_regardless();
+    } else {
+        panel.show_and_make_key();
+    }
+    let _ = app_handle.emit("widget:mode-changed", mode);
+    let _ = app_handle.emit("tray:shown", ());
+    Ok(mode)
+}
+
+pub fn set_desktop_mode(app_handle: &AppHandle, pinned: bool, click_through: bool) -> Result<DesktopWidgetState, String> {
+    let mode = requested_mode(pinned, click_through)?;
+    if objc2_foundation::MainThreadMarker::new().is_some() {
+        return apply_desktop_mode(app_handle, mode);
+    }
+    let handle = app_handle.clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app_handle.run_on_main_thread(move || { let _ = sender.send(apply_desktop_mode(&handle, mode)); })
+        .map_err(|_| "無法排定桌面浮窗操作".to_string())?;
+    receiver.recv_timeout(std::time::Duration::from_secs(3))
+        .map_err(|_| "桌面浮窗尚未回應，請從選單列恢復互動".to_string())?
+}
+
+#[tauri::command]
+pub async fn configure_desktop_widget(app_handle: AppHandle, pinned: bool, click_through: bool) -> Result<DesktopWidgetState, String> {
+    set_desktop_mode(&app_handle, pinned, click_through)
+}
 
 fn monitor_contains_physical_point(
     origin_x: f64,
@@ -90,7 +158,7 @@ pub(crate) use get_or_init_panel;
 
 /// Retrieve the tray icon rect and position the panel beneath it.
 /// No-ops gracefully if the tray icon or its rect is unavailable.
-fn position_panel_from_tray(app_handle: &AppHandle) {
+pub(crate) fn position_panel_from_tray(app_handle: &AppHandle) {
     let Some(tray) = app_handle.tray_by_id("tray") else {
         log::debug!("position_panel_from_tray: tray icon not found");
         return;
@@ -110,15 +178,25 @@ fn position_panel_from_tray(app_handle: &AppHandle) {
 
 /// Show the panel (initializing if needed), positioned under the tray icon.
 pub fn show_panel(app_handle: &AppHandle) {
+    let mode = desktop_widget_state();
+    if mode.click_through {
+        let _ = set_desktop_mode(app_handle, mode.pinned, false);
+    }
     if let Some(panel) = get_or_init_panel!(app_handle) {
         panel.show_and_make_key();
-        position_panel_from_tray(app_handle);
+        if !desktop_widget_state().pinned { position_panel_from_tray(app_handle); }
+        let _ = app_handle.emit("tray:shown", ());
     }
 }
 
 /// Toggle panel visibility. If visible, hide it. If hidden, show it.
 /// Used by global shortcut handler.
 pub fn toggle_panel(app_handle: &AppHandle) {
+    let mode = desktop_widget_state();
+    if mode.click_through {
+        let _ = set_desktop_mode(app_handle, mode.pinned, false);
+        return;
+    }
     let Some(panel) = get_or_init_panel!(app_handle) else {
         return;
     };
@@ -129,7 +207,8 @@ pub fn toggle_panel(app_handle: &AppHandle) {
     } else {
         log::debug!("toggle_panel: showing panel");
         panel.show_and_make_key();
-        position_panel_from_tray(app_handle);
+        if !desktop_widget_state().pinned { position_panel_from_tray(app_handle); }
+        let _ = app_handle.emit("tray:shown", ());
     }
 }
 
@@ -160,6 +239,9 @@ pub fn init(app_handle: &tauri::AppHandle) -> tauri::Result<()> {
     // Let CSS handle shadow via shadow-xl class
     panel.set_has_shadow(false);
     panel.set_opaque(false);
+    panel.set_ignores_mouse_events(false);
+    panel.set_hides_on_deactivate(false);
+    panel.set_movable_by_window_background(false);
 
     // Configure panel behavior
     panel.set_level(PanelLevel::MainMenu.value() + 1);
@@ -178,6 +260,7 @@ pub fn init(app_handle: &tauri::AppHandle) -> tauri::Result<()> {
 
     let handle = app_handle.clone();
     event_handler.window_did_resign_key(move |_notification| {
+        if desktop_widget_state().pinned { return; }
         if let Ok(panel) = handle.get_webview_panel("main") {
             panel.hide();
         }
@@ -270,7 +353,8 @@ pub fn position_panel_at_tray_icon(
     };
 
     let icon_center_x = icon_logical_x + (icon_logical_w / 2.0);
-    let panel_x = icon_center_x - (panel_width / 2.0);
+    let monitor_width = monitor.size().width as f64 / target_scale;
+    let panel_x = clamp_panel_x(icon_center_x, panel_width, mon_logical_x, monitor_width);
     let nudge_up: f64 = 6.0;
     // Clamp to the monitor's top edge: when the menu bar is set to auto-hide,
     // the tray rect sits above the visible screen, which would otherwise push
@@ -278,4 +362,37 @@ pub fn position_panel_at_tray_icon(
     let panel_y = (icon_logical_y + icon_logical_h - nudge_up).max(mon_logical_y);
 
     set_panel_top_left_immediately(&window, app_handle, panel_x, panel_y, primary_logical_h);
+}
+
+
+fn clamp_panel_x(icon_center_x: f64, panel_width: f64, monitor_x: f64, monitor_width: f64) -> f64 {
+    let right = (monitor_x + monitor_width - panel_width).max(monitor_x);
+    (icon_center_x - panel_width / 2.0).clamp(monitor_x, right)
+}
+
+#[cfg(test)]
+mod dashboard_tests {
+    use super::{clamp_panel_x, requested_mode};
+
+    #[test]
+    fn desktop_mode_requires_pin_and_starts_interactive() {
+        assert!(requested_mode(false, true).is_err());
+        assert!(!requested_mode(false, false).unwrap().click_through);
+        assert!(requested_mode(true, true).unwrap().click_through);
+        assert_eq!(requested_mode(false, false).unwrap(), super::DesktopWidgetState::default());
+    }
+
+    #[test]
+    fn wide_dashboard_stays_inside_both_monitor_edges() {
+        assert_eq!(clamp_panel_x(20.0, 820.0, 0.0, 1440.0), 0.0);
+        assert_eq!(clamp_panel_x(1420.0, 820.0, 0.0, 1440.0), 620.0);
+        assert_eq!(clamp_panel_x(720.0, 820.0, 0.0, 1440.0), 310.0);
+    }
+
+    #[test]
+    fn left_monitor_and_oversize_fallback_stay_visible() {
+        assert_eq!(clamp_panel_x(-10.0, 820.0, -1440.0, 1440.0), -820.0);
+        assert_eq!(clamp_panel_x(-1400.0, 820.0, -1440.0, 1440.0), -1440.0);
+        assert_eq!(clamp_panel_x(300.0, 820.0, 0.0, 600.0), 0.0);
+    }
 }

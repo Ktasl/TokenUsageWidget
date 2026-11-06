@@ -1,7 +1,7 @@
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::path::BaseDirectory;
-use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_nspanel::ManagerExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -56,11 +56,12 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
     let current_level = get_stored_log_level(app_handle);
     log::set_max_level(current_level);
 
-    let show_stats = MenuItem::with_id(app_handle, "show_stats", "Show Stats", true, None::<&str>)?;
+    let restore_widget = MenuItem::with_id(app_handle, "restore_widget", "恢復互動／取消釘選", true, None::<&str>)?;
+    let show_stats = MenuItem::with_id(app_handle, "show_stats", "用量總覽", true, None::<&str>)?;
     let go_to_settings = MenuItem::with_id(
         app_handle,
         "go_to_settings",
-        "Go to Settings",
+        "設定",
         true,
         None::<&str>,
     )?;
@@ -69,7 +70,7 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
     let log_error = CheckMenuItem::with_id(
         app_handle,
         "log_error",
-        "Error",
+        "錯誤",
         true,
         current_level == log::LevelFilter::Error,
         None::<&str>,
@@ -77,7 +78,7 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
     let log_warn = CheckMenuItem::with_id(
         app_handle,
         "log_warn",
-        "Warn",
+        "警告",
         true,
         current_level == log::LevelFilter::Warn,
         None::<&str>,
@@ -85,7 +86,7 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
     let log_info = CheckMenuItem::with_id(
         app_handle,
         "log_info",
-        "Info",
+        "資訊",
         true,
         current_level == log::LevelFilter::Info,
         None::<&str>,
@@ -93,7 +94,7 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
     let log_debug = CheckMenuItem::with_id(
         app_handle,
         "log_debug",
-        "Debug",
+        "偵錯",
         true,
         current_level == log::LevelFilter::Debug,
         None::<&str>,
@@ -101,7 +102,7 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
     let log_trace = CheckMenuItem::with_id(
         app_handle,
         "log_trace",
-        "Trace",
+        "詳細追蹤",
         true,
         current_level == log::LevelFilter::Trace,
         None::<&str>,
@@ -110,7 +111,7 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
     let copy_log_path = MenuItem::with_id(
         app_handle,
         "copy_log_path",
-        "Copy Log Path",
+        "複製日誌路徑",
         true,
         None::<&str>,
     )?;
@@ -139,13 +140,14 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
     ];
 
     let separator = PredefinedMenuItem::separator(app_handle)?;
-    let about = MenuItem::with_id(app_handle, "about", "About OpenUsage", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app_handle, "quit", "Quit", true, None::<&str>)?;
+    let about = MenuItem::with_id(app_handle, "about", format!("關於 {}", app_handle.package_info().name), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app_handle, "quit", "結束", true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app_handle,
         &[
             &show_stats,
+            &restore_widget,
             &go_to_settings,
             &log_level_submenu,
             &separator,
@@ -157,12 +159,18 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
     TrayIconBuilder::with_id("tray")
         .icon(icon)
         .icon_as_template(true)
-        .tooltip("OpenUsage")
+        .tooltip(&app_handle.package_info().name)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app_handle, event| {
             log::debug!("tray menu: {}", event.id.as_ref());
             match event.id.as_ref() {
+                "restore_widget" => {
+                    if crate::panel::set_desktop_mode(app_handle, false, false).is_err() {
+                        log::error!("desktop widget recovery failed");
+                    }
+                    show_panel(app_handle);
+                }
                 "show_stats" => {
                     show_panel(app_handle);
                     let _ = app_handle.emit("tray:navigate", "home");
@@ -216,10 +224,18 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
             let app_handle = tray.app_handle();
 
             if let TrayIconEvent::Click {
-                button_state, rect, ..
+                button: MouseButton::Left, button_state, rect, ..
             } = event
             {
                 if button_state == MouseButtonState::Up {
+                    let mode = crate::panel::desktop_widget_state();
+                    if mode.click_through {
+                        if crate::panel::set_desktop_mode(app_handle, mode.pinned, false).is_err() {
+                            log::error!("desktop widget interaction recovery failed");
+                        }
+                        show_panel(app_handle);
+                        return;
+                    }
                     let Some(panel) = get_or_init_panel!(app_handle) else {
                         return;
                     };
@@ -230,10 +246,12 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
                         return;
                     }
                     log::debug!("tray click: showing panel");
+                    let _ = app_handle.emit("tray:navigate", "home");
 
                     // macOS quirk: must show window before positioning to another monitor
                     panel.show_and_make_key();
-                    position_panel_at_tray_icon(app_handle, rect.position, rect.size);
+                    if !mode.pinned { position_panel_at_tray_icon(app_handle, rect.position, rect.size); }
+                    let _ = app_handle.emit("tray:shown", ());
                 }
             }
         })

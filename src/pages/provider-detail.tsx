@@ -22,13 +22,14 @@ export function ProviderDetailPage({
   if (!plugin) {
     return (
       <div className="text-center text-muted-foreground py-8">
-        Provider not found
+        找不到此服務
       </div>
     )
   }
 
   return (
     <ProviderCard
+      providerId={plugin.meta.id}
       name={plugin.meta.name}
       plan={plugin.data?.plan}
       links={plugin.meta.links}
@@ -39,6 +40,7 @@ export function ProviderDetailPage({
       skeletonLines={plugin.meta.lines}
       lastManualRefreshAt={plugin.lastManualRefreshAt}
       lastUpdatedAt={plugin.lastUpdatedAt}
+      tokenUsageReport={plugin.data?.tokenUsageReport}
       onRetry={onRetry}
       scopeFilter="all"
       displayMode={displayMode}

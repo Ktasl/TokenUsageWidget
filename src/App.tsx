@@ -94,13 +94,14 @@ function App() {
     setAutoUpdateNextAt,
     handleRetryPlugin,
     handleRefreshAll,
+    backgroundError,
   } = useProbe({
     pluginSettings,
     autoUpdateInterval,
     onProbeResult: handleProbeResult,
   })
 
-  const { scheduleTrayIconUpdate, traySettingsPreview } = useTrayIcon({
+  const { scheduleTrayIconUpdate, traySettingsPreview, summaryError } = useTrayIcon({
     pluginsMeta,
     pluginSettings,
     pluginStates,
@@ -170,6 +171,7 @@ function App() {
   const {
     handleReorder,
     handleToggle,
+    handleMetricChange,
   } = useSettingsPluginActions({
     pluginSettings,
     setPluginSettings,
@@ -182,6 +184,7 @@ function App() {
   const settingsPlugins = useSettingsPluginList({
     pluginSettings,
     pluginsMeta,
+    pluginStates,
   })
 
   const { displayPlugins, navPlugins, selectedPlugin } = useAppPluginViews({
@@ -231,6 +234,7 @@ function App() {
       const pluginState = pluginStates[pluginId]
       if (!pluginState) return true
       if (pluginState.loading) return false
+      if (pluginState.error) return true
       if (!pluginState.lastManualRefreshAt) return true
       return Date.now() - pluginState.lastManualRefreshAt >= REFRESH_COOLDOWN_MS
     },
@@ -244,6 +248,7 @@ function App() {
       displayPlugins={displayPlugins}
       settingsPlugins={settingsPlugins}
       autoUpdateNextAt={autoUpdateNextAt}
+      backgroundError={[backgroundError, summaryError].filter(Boolean).join(" ") || null}
       selectedPlugin={selectedPlugin}
       onPluginContextAction={handlePluginContextAction}
       isPluginRefreshAvailable={isPluginRefreshAvailable}
@@ -252,6 +257,7 @@ function App() {
         onRetryPlugin: handleRetryPlugin,
         onReorder: handleReorder,
         onToggle: handleToggle,
+        onMetricChange: handleMetricChange,
         onAutoUpdateIntervalChange: handleAutoUpdateIntervalChange,
         onThemeModeChange: handleThemeModeChange,
         onDisplayModeChange: handleDisplayModeChange,

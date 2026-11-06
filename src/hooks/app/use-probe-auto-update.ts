@@ -12,6 +12,7 @@ type UseProbeAutoUpdateArgs = {
   setErrorForPlugins: (ids: string[], error: string) => void
   isPluginLoading: (id: string) => boolean
   startBatch: (pluginIds?: string[]) => Promise<string[] | undefined>
+  nativeBackgroundReady?: boolean
 }
 
 export function useProbeAutoUpdate({
@@ -21,6 +22,7 @@ export function useProbeAutoUpdate({
   setErrorForPlugins,
   isPluginLoading,
   startBatch,
+  nativeBackgroundReady = false,
 }: UseProbeAutoUpdateArgs) {
   const [autoUpdateNextAt, setAutoUpdateNextAt] = useState<number | null>(null)
   const [autoUpdateResetToken, setAutoUpdateResetToken] = useState(0)
@@ -38,10 +40,17 @@ export function useProbeAutoUpdate({
     }
 
     const intervalMs = autoUpdateInterval * 60_000
-    const scheduleNext = () => setAutoUpdateNextAt(Date.now() + intervalMs)
+    let nextAt = 0
+    const scheduleNext = () => {
+      nextAt = Date.now() + intervalMs
+      setAutoUpdateNextAt(nextAt)
+    }
     scheduleNext()
 
-    const interval = setInterval(() => {
+    const refreshIfDue = (forceVisible = false) => {
+      if (Date.now() < nextAt) return
+      // macOS 13 can suspend a hidden WebView. Native owns background queries.
+      if (nativeBackgroundReady && !forceVisible && document.visibilityState === "hidden") return
       const idleIds = enabledIds.filter((id) => !isPluginLoading(id))
       if (idleIds.length === 0) {
         scheduleNext()
@@ -54,9 +63,19 @@ export function useProbeAutoUpdate({
         setErrorForPlugins(idleIds, "Failed to start probe")
       })
       scheduleNext()
-    }, intervalMs)
-
-    return () => clearInterval(interval)
+    }
+    const interval = setInterval(() => refreshIfDue(), intervalMs)
+    const nativeResume = () => refreshIfDue(true)
+    const wake = () => { if (document.visibilityState !== "hidden") refreshIfDue() }
+    window.addEventListener("focus", wake)
+    window.addEventListener("usage:resume", nativeResume)
+    document.addEventListener("visibilitychange", wake)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener("focus", wake)
+      window.removeEventListener("usage:resume", nativeResume)
+      document.removeEventListener("visibilitychange", wake)
+    }
   }, [
     autoUpdateInterval,
     autoUpdateResetToken,
@@ -65,6 +84,7 @@ export function useProbeAutoUpdate({
     setLoadingForPlugins,
     setErrorForPlugins,
     startBatch,
+    nativeBackgroundReady,
   ])
 
   const resetAutoUpdateSchedule = useCallback(() => {

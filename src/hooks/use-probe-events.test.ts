@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
+  isTauri: () => false,
 }))
 
 import { useProbeEvents } from "@/hooks/use-probe-events"
@@ -94,7 +95,7 @@ describe("useProbeEvents", () => {
     }
   })
 
-  it("starts batch after unmount without waiting for listeners", async () => {
+  it("does not start a batch after unmount", async () => {
     invokeMock.mockImplementation(async (_cmd: string, args: any) => ({
       batchId: args.batchId,
       pluginIds: args.pluginIds ?? [],
@@ -106,7 +107,7 @@ describe("useProbeEvents", () => {
     unmount()
     const ids = await act(() => start())
     expect(ids).toEqual([])
-    expect(invokeMock).toHaveBeenCalled()
+    expect(invokeMock).not.toHaveBeenCalled()
   })
 
   it("routes probe events to active batch", async () => {
@@ -155,13 +156,28 @@ describe("useProbeEvents", () => {
     expect(onBatchComplete).not.toHaveBeenCalled()
   })
 
-  it("rejects when invoke fails", async () => {
+  it("accepts a fast result before the native start acknowledgement even with discovered ids", async () => {
+    const output = { providerId: "a", displayName: "A", lines: [], iconUrl: "" } satisfies PluginOutput
+    invokeMock.mockImplementation(async (_cmd: string, args: any) => {
+      listeners.get("probe:result")?.({ payload: { batchId: args.batchId, output } })
+      return { batchId: args.batchId, pluginIds: ["a"] }
+    })
+    const onResult = vi.fn()
+    const { result } = renderHook(() => useProbeEvents({ onResult, onBatchComplete: vi.fn() }))
+    await act(() => result.current.startBatch())
+    expect(onResult).toHaveBeenCalledExactlyOnceWith(output)
+    const batchId = invokeMock.mock.calls[0][1].batchId
+    listeners.get("probe:batch-complete")?.({ payload: { batchId } })
+    expect(onResult).toHaveBeenCalledTimes(1)
+  })
+
+  it("delivers a terminal error instead of leaving loading when invoke fails", async () => {
     invokeMock.mockRejectedValueOnce(new Error("boom"))
     const { result } = renderHook(() =>
       useProbeEvents({ onResult: vi.fn(), onBatchComplete: vi.fn() })
     )
 
-    await expect(result.current.startBatch(["a"])).rejects.toThrow("boom")
+    await expect(result.current.startBatch(["a"])).resolves.toBeUndefined()
   })
 
   it("cancels before listeners are ready", async () => {
@@ -177,6 +193,16 @@ describe("useProbeEvents", () => {
     ref.resolve?.(unlisten)
     await Promise.resolve()
     expect(unlisten).toHaveBeenCalled()
+  })
+
+  it("fails pending providers cleanly when listener registration fails", async () => {
+    listenMock.mockRejectedValueOnce(new Error("fixture listener failure"))
+    const onResult = vi.fn()
+    const { result } = renderHook(() => useProbeEvents({ onResult, onBatchComplete: vi.fn() }))
+    await act(() => result.current.startBatch(["codex"]))
+    expect(invokeMock).not.toHaveBeenCalled()
+    expect(onResult).toHaveBeenCalledTimes(1)
+    expect(onResult.mock.calls[0][0]).toMatchObject({ providerId: "codex", lines: [{ type: "badge", label: "Error" }] })
   })
 
   it("cancels after first listener is ready", async () => {

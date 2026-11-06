@@ -27,6 +27,10 @@ function isProgressLine(line: PluginOutput["lines"][number]): line is ProgressLi
   return line.type === "progress"
 }
 
+function hasValidQuota(line: ProgressLine | undefined): line is ProgressLine {
+  return line !== undefined && Number.isFinite(line.used) && Number.isFinite(line.limit) && line.limit > 0
+}
+
 export function getTrayPrimaryBars(args: {
   pluginsMeta: PluginMeta[]
   pluginSettings: PluginSettings | null
@@ -59,11 +63,13 @@ export function getTrayPrimaryBars(args: {
     const meta = metaById.get(id)
     if (!meta) continue
     
-    // Skip plugins with no primary metric. Weekly mode is an override of the
-    // primary (see preferWeekly below), not a standalone mode — so a provider
-    // must define primaryCandidates to appear in the menubar; a weekly-only
-    // provider is intentionally skipped.
-    if (!meta.primaryCandidates || meta.primaryCandidates.length === 0) continue
+    const candidateLabels = [
+      ...(pluginSettings.menubarMetrics?.[id] ? [pluginSettings.menubarMetrics[id]] : []),
+      ...(preferWeekly && meta.weeklyCandidate ? [meta.weeklyCandidate] : []),
+      ...(meta.primaryCandidates ?? []),
+      ...meta.lines.filter((line) => line.type === "progress" && line.scope === "overview").map((line) => line.label),
+    ]
+    if (candidateLabels.length === 0) continue
 
     const state = pluginStates[id]
     const data = state?.data ?? null
@@ -72,33 +78,20 @@ export function getTrayPrimaryBars(args: {
     let label: string | undefined
     let weekly: true | undefined
     if (data) {
-      // Prefer the declared weekly line when requested and present in data.
-      const weeklyLabel = preferWeekly ? meta.weeklyCandidate : undefined
-      const usesWeekly =
-        weeklyLabel !== undefined &&
-        data.lines.some((line) => isProgressLine(line) && line.label === weeklyLabel)
-
-      // Otherwise fall back to the first primary candidate that exists in data.
-      const metricLabel = usesWeekly
-        ? weeklyLabel
-        : meta.primaryCandidates.find((candidate) =>
-            data.lines.some((line) => isProgressLine(line) && line.label === candidate)
-          )
-
-      if (metricLabel) {
-        label = metricLabel
-        weekly = usesWeekly || undefined
-        const metricLine = data.lines.find(
-          (line): line is ProgressLine =>
-            isProgressLine(line) && line.label === metricLabel
+      const candidates = candidateLabels.map((candidate) =>
+        data.lines.find(
+          (line): line is ProgressLine => isProgressLine(line) && line.label === candidate
         )
-        if (metricLine && metricLine.limit > 0) {
-          const shownAmount =
-            displayMode === "used"
-              ? metricLine.used
-              : metricLine.limit - metricLine.used
-          fraction = clamp01(shownAmount / metricLine.limit)
-        }
+      )
+      // A declared metric can be absent or invalid for the current account.
+      // Try the remaining primary metrics, then declared overview quota lines.
+      const metricLine = candidates.find(hasValidQuota)
+      const selectedLine = metricLine ?? candidates.find((line) => line !== undefined)
+      label = selectedLine?.label
+      weekly = (preferWeekly && label !== undefined && label === meta.weeklyCandidate) || undefined
+      if (metricLine) {
+        const shownAmount = displayMode === "used" ? metricLine.used : metricLine.limit - metricLine.used
+        fraction = clamp01(shownAmount / metricLine.limit)
       }
     }
 
@@ -108,4 +101,3 @@ export function getTrayPrimaryBars(args: {
 
   return out
 }
-

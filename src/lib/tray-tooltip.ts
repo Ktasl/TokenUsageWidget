@@ -1,5 +1,6 @@
 import type { PluginMeta } from "@/lib/plugin-types"
 import type { TrayPrimaryBar } from "@/lib/tray-primary-progress"
+import { APP_DISPLAY_NAME } from "@/lib/app-edition"
 
 /**
  * Formats a fraction (0.0 - 1.0) into a percentage string (0% - 100%).
@@ -23,7 +24,7 @@ export function formatTrayTooltip(
   pluginsMeta: PluginMeta[],
   weeklyMode = false
 ): string {
-  const lines = ["OpenUsage"]
+  const lines = [APP_DISPLAY_NAME]
   if (bars.length === 0) return lines[0]!
 
   const resolved = bars.filter((bar) => bar.label !== undefined)

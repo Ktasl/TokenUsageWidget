@@ -1,270 +1,25 @@
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { GripVertical } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { GlobalShortcutSection } from "@/components/global-shortcut-section";
-import { getBarFillLayout, getTrayIconSizePx } from "@/lib/tray-bars-icon";
+import { MenubarIconStylePreview } from "@/components/settings/menubar-icon-style-preview";
+import { ServiceSettings, type PluginConfig } from "@/components/settings/service-settings";
 import {
-  AUTO_UPDATE_OPTIONS,
-  DISPLAY_MODE_OPTIONS,
-  MENUBAR_ICON_STYLE_OPTIONS,
-  MENUBAR_METRIC_OPTIONS,
-  RESET_TIMER_DISPLAY_OPTIONS,
-  THEME_OPTIONS,
-  TIME_FORMAT_OPTIONS,
-  type AutoUpdateIntervalMinutes,
-  type DisplayMode,
-  type GlobalShortcut,
-  type MenubarIconStyle,
-  type MenubarMetric,
-  type ResetTimerDisplayMode,
-  type ThemeMode,
-  type TimeFormatMode,
+  AUTO_UPDATE_OPTIONS, DISPLAY_MODE_OPTIONS, MENUBAR_ICON_STYLE_OPTIONS, MENUBAR_METRIC_OPTIONS,
+  RESET_TIMER_DISPLAY_OPTIONS, THEME_OPTIONS, TIME_FORMAT_OPTIONS,
+  type AutoUpdateIntervalMinutes, type DisplayMode, type GlobalShortcut, type MenubarIconStyle,
+  type MenubarMetric, type ResetTimerDisplayMode, type ThemeMode, type TimeFormatMode,
 } from "@/lib/settings";
 import { getTimeFormatter } from "@/lib/reset-tooltip";
 import type { TraySettingsPreview } from "@/hooks/app/use-tray-icon";
 import { cn } from "@/lib/utils";
-
-interface PluginConfig {
-  id: string;
-  name: string;
-  enabled: boolean;
-}
-
-const TRAY_PREVIEW_SIZE_PX = getTrayIconSizePx(1);
-
-const PREVIEW_BAR_TRACK_PX = 20;
-
-function getPreviewBarLayout(fraction: number): { fillPercent: number; remainderPercent: number } {
-  const { fillW, remainderDrawW } = getBarFillLayout(PREVIEW_BAR_TRACK_PX, fraction);
-  return {
-    fillPercent: (fillW / PREVIEW_BAR_TRACK_PX) * 100,
-    remainderPercent: (remainderDrawW / PREVIEW_BAR_TRACK_PX) * 100,
-  };
-}
-
-function ProviderIconMask({
-  iconUrl,
-  isActive,
-  sizePx,
-}: {
-  iconUrl?: string;
-  isActive: boolean;
-  sizePx: number;
-}) {
-  const colorClass = isActive ? "bg-primary-foreground" : "bg-foreground";
-  if (iconUrl) {
-    return (
-      <div
-        aria-hidden
-        className={cn("shrink-0", colorClass)}
-        style={{
-          width: `${sizePx}px`,
-          height: `${sizePx}px`,
-          WebkitMaskImage: `url(${iconUrl})`,
-          WebkitMaskSize: "contain",
-          WebkitMaskRepeat: "no-repeat",
-          WebkitMaskPosition: "center",
-          maskImage: `url(${iconUrl})`,
-          maskSize: "contain",
-          maskRepeat: "no-repeat",
-          maskPosition: "center",
-        }}
-      />
-    );
-  }
-  const textClass = isActive ? "text-primary-foreground" : "text-foreground";
-  return (
-    <svg aria-hidden viewBox="0 0 26 26" className={cn("shrink-0", textClass)} style={{ width: `${sizePx}px`, height: `${sizePx}px` }}>
-      <circle cx="13" cy="13" r="9" fill="none" stroke="currentColor" strokeWidth="3.5" opacity={0.3} />
-    </svg>
-  );
-}
-
-function MenubarIconStylePreview({
-  style,
-  isActive,
-  traySettingsPreview,
-}: {
-  style: MenubarIconStyle;
-  isActive: boolean;
-  traySettingsPreview: TraySettingsPreview;
-}) {
-  const textClass = isActive ? "text-primary-foreground" : "text-foreground";
-
-  if (style === "provider") {
-    return (
-      <div className="inline-flex items-center gap-0.5">
-        <ProviderIconMask
-          iconUrl={traySettingsPreview.providerIconUrl}
-          isActive={isActive}
-          sizePx={TRAY_PREVIEW_SIZE_PX}
-        />
-        <span className={cn("text-[12px] font-semibold tabular-nums leading-none", textClass)}>
-          {traySettingsPreview.providerPercentText}
-        </span>
-      </div>
-    );
-  }
-
-  if (style === "bars") {
-    const trackClass = isActive ? "bg-primary-foreground/15" : "bg-foreground/15";
-    const remainderClass = isActive ? "bg-primary-foreground/20" : "bg-foreground/15";
-    const fillClass = isActive ? "bg-primary-foreground" : "bg-foreground";
-    const fractions = traySettingsPreview.bars.length > 0
-      ? traySettingsPreview.bars.map((b) => b.fraction ?? 0)
-      : [0.83, 0.7, 0.56];
-
-    return (
-      <div className="flex items-center">
-        <div className="flex flex-col gap-0.5 w-5">
-          {fractions.map((fraction, i) => {
-            const { fillPercent, remainderPercent } = getPreviewBarLayout(fraction);
-            return (
-              <div key={i} className={cn("relative h-1 rounded-sm", trackClass)}>
-                {remainderPercent > 0 && (
-                  <span
-                    aria-hidden
-                    className={remainderClass}
-                    style={{
-                      position: "absolute",
-                      right: 0,
-                      top: 0,
-                      bottom: 0,
-                      width: `${remainderPercent}%`,
-                      borderRadius: "1px 2px 2px 1px",
-                    }}
-                  />
-                )}
-                <div
-                  className={cn("h-1", fillClass)}
-                  style={{ width: `${fillPercent}%`, borderRadius: "2px 1px 1px 2px" }}
-                />
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  if (style === "donut") {
-    const fraction = traySettingsPreview.providerBars[0]?.fraction ?? 0;
-    const clamped = Math.max(0, Math.min(1, fraction));
-    return (
-      <div className="inline-flex items-center gap-1">
-        <ProviderIconMask
-          iconUrl={traySettingsPreview.providerIconUrl}
-          isActive={isActive}
-          sizePx={TRAY_PREVIEW_SIZE_PX}
-        />
-        <svg aria-hidden viewBox="0 0 26 26" className={cn("shrink-0", textClass)} style={{ width: `${TRAY_PREVIEW_SIZE_PX}px`, height: `${TRAY_PREVIEW_SIZE_PX}px` }}>
-          <circle
-            cx="13" cy="13" r="9"
-            fill="none" stroke="currentColor" strokeWidth="4"
-            opacity={isActive ? 0.2 : 0.15}
-          />
-          {clamped > 0 && (
-            <circle
-              cx="13" cy="13" r="9"
-              fill="none" stroke="currentColor" strokeWidth="4"
-              strokeLinecap="butt"
-              pathLength="100"
-              strokeDasharray={`${Math.round(clamped * 100)} 100`}
-              transform="rotate(-90 13 13)"
-            />
-          )}
-        </svg>
-      </div>
-    );
-  }
-
-  return null;
-}
-
-function SortablePluginItem({
-  plugin,
-  onToggle,
-}: {
-  plugin: PluginConfig;
-  onToggle: (id: string) => void;
-}) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: plugin.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      onClick={() => onToggle(plugin.id)}
-      className={cn(
-        "flex items-center gap-3 px-3 py-2 rounded-md bg-card cursor-pointer",
-        "border border-transparent",
-        isDragging && "opacity-50 border-border"
-      )}
-    >
-      <button
-        type="button"
-        onClick={(e) => e.stopPropagation()}
-        className="touch-none cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground transition-colors"
-        {...attributes}
-        {...listeners}
-      >
-        <GripVertical className="h-4 w-4" />
-      </button>
-
-      <span
-        className={cn(
-          "flex-1 text-sm",
-          !plugin.enabled && "text-muted-foreground"
-        )}
-      >
-        {plugin.name}
-      </span>
-
-      {/* Wrap to stop Base UI's internal input.click() from bubbling to the row div */}
-      <span onClick={(e) => e.stopPropagation()}>
-        <Checkbox
-          key={`${plugin.id}-${plugin.enabled}`}
-          checked={plugin.enabled}
-          onCheckedChange={() => onToggle(plugin.id)}
-        />
-      </span>
-    </div>
-  );
-}
+import { APP_DISPLAY_NAME, IS_TEST_BUILD } from "@/lib/app-edition";
 
 interface SettingsPageProps {
   plugins: PluginConfig[];
   onReorder: (orderedIds: string[]) => void;
   onToggle: (id: string) => void;
+  onMetricChange?: (id: string, label: string) => void;
   autoUpdateInterval: AutoUpdateIntervalMinutes;
   onAutoUpdateIntervalChange: (value: AutoUpdateIntervalMinutes) => void;
   themeMode: ThemeMode;
@@ -286,305 +41,107 @@ interface SettingsPageProps {
   onStartOnLoginChange: (value: boolean) => void;
 }
 
-export function SettingsPage({
-  plugins,
-  onReorder,
-  onToggle,
-  autoUpdateInterval,
-  onAutoUpdateIntervalChange,
-  themeMode,
-  onThemeModeChange,
-  displayMode,
-  onDisplayModeChange,
-  resetTimerDisplayMode,
-  onResetTimerDisplayModeChange,
-  timeFormatMode,
-  onTimeFormatModeChange,
-  menubarIconStyle,
-  onMenubarIconStyleChange,
-  menubarMetric,
-  onMenubarMetricChange,
-  traySettingsPreview,
-  globalShortcut,
-  onGlobalShortcutChange,
-  startOnLogin,
-  onStartOnLoginChange,
-}: SettingsPageProps) {
-  const sensors = useSensors(
-    useSensor(PointerSensor),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
-  );
+function SettingCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return <section className="rounded-xl border border-border/60 bg-card/70 p-3.5 shadow-sm">
+    <h3 className="text-sm font-semibold">{title}</h3>
+    <p className="mt-1 mb-3 text-xs leading-relaxed text-muted-foreground">{description}</p>
+    {children}
+  </section>;
+}
 
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
+function Choices<T extends string | number>({ label, options, value, onChange, example }: {
+  label: string; options: { value: T; label: string }[]; value: T; onChange: (value: T) => void; example?: (value: T) => string;
+}) {
+  return <div className="flex gap-1 rounded-lg bg-muted/60 p-1" role="radiogroup" aria-label={label}>
+    {options.map((option) => <Button key={option.value} type="button" role="radio" aria-label={option.label}
+      aria-checked={option.value === value} variant={option.value === value ? "default" : "ghost"} size="sm"
+      className={cn("min-w-0 flex-1 rounded-md px-1 text-xs", example && "h-auto flex-col gap-0.5 py-2")}
+      onClick={() => onChange(option.value)}>
+      <span>{option.label}</span>{example && <span className={cn("text-[10px] font-normal", option.value === value ? "text-primary-foreground/80" : "text-muted-foreground")}>{example(option.value)}</span>}
+    </Button>)}
+  </div>;
+}
 
-    if (over && active.id !== over.id) {
-      const oldIndex = plugins.findIndex((item) => item.id === active.id);
-      const newIndex = plugins.findIndex((item) => item.id === over.id);
-      if (oldIndex === -1 || newIndex === -1) return;
-      const next = arrayMove(plugins, oldIndex, newIndex);
-      onReorder(next.map((item) => item.id));
-    }
-  };
+const categories = [
+  { id: "display", label: "顯示與外觀" },
+  { id: "services", label: "服務與模型" },
+  { id: "system", label: "更新與系統" },
+] as const;
 
+export function SettingsPage(props: SettingsPageProps) {
+  const [category, setCategory] = useState<(typeof categories)[number]["id"]>("display");
+  const timeExample = (mode: TimeFormatMode) => getTimeFormatter(mode).format(new Date(2026, 1, 2, 11, 4));
   return (
-    <div className="py-3 space-y-4">
-      <section>
-        <h3 className="text-lg font-semibold mb-0">Auto Refresh</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          How obsessive are you
-        </p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Auto-update interval">
-            {AUTO_UPDATE_OPTIONS.map((option) => {
-              const isActive = option.value === autoUpdateInterval;
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1"
-                  onClick={() => onAutoUpdateIntervalChange(option.value)}
-                >
-                  {option.label}
-                </Button>
-              );
-            })}
+    <div className="@container pb-4">
+      <div className="sticky top-0 z-10 -mx-1 mb-4 bg-background/95 px-1 pt-2 pb-2 backdrop-blur">
+        <div role="tablist" aria-label="設定分類" className="grid grid-cols-3 gap-1 rounded-xl border border-border/50 bg-muted/50 p-1">
+          {categories.map((item, index) => <button key={item.id} id={`settings-tab-${item.id}`} type="button"
+            role="tab" aria-selected={category === item.id} aria-controls={`settings-panel-${item.id}`} tabIndex={category === item.id ? 0 : -1}
+            onClick={() => setCategory(item.id)}
+            onKeyDown={(event) => {
+              const next = event.key === "ArrowRight" ? (index + 1) % categories.length
+                : event.key === "ArrowLeft" ? (index + categories.length - 1) % categories.length
+                : event.key === "Home" ? 0 : event.key === "End" ? categories.length - 1 : null;
+              if (next === null) return;
+              event.preventDefault();
+              setCategory(categories[next].id);
+              document.getElementById(`settings-tab-${categories[next].id}`)?.focus();
+            }}
+            className={cn("rounded-lg px-1 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", category === item.id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+            {item.label}
+          </button>)}
+        </div>
+      </div>
+      <div id={`settings-panel-${category}`} role="tabpanel" aria-labelledby={`settings-tab-${category}`} className="grid grid-cols-1 items-start gap-3 @min-[620px]:grid-cols-2">
+        {category === "display" && <>
+          <SettingCard title="選單列顯示" description="服務圖示會顯示所有已啟用且有有效額度的服務，數量沒有上限。">
+            <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted/60 p-1 @min-[620px]:grid-cols-3" role="radiogroup" aria-label="選單列圖示樣式">
+              {MENUBAR_ICON_STYLE_OPTIONS.map((option) => <Button key={option.value} type="button" role="radio" aria-label={option.label}
+                aria-checked={option.value === props.menubarIconStyle} variant={option.value === props.menubarIconStyle ? "default" : "ghost"} size="sm"
+                className={cn("h-auto min-w-0 flex-1 flex-col gap-2 rounded-md px-1 py-2.5", option.value === "compact" && "col-span-2 @min-[620px]:col-span-3", option.value === "provider" && props.traySettingsPreview.providerItems.length > 1 && "flex-[2]")}
+                onClick={() => props.onMenubarIconStyleChange(option.value)}>
+                <MenubarIconStylePreview style={option.value} isActive={option.value === props.menubarIconStyle} traySettingsPreview={props.traySettingsPreview} />
+                <span className="text-[10px] font-normal">{option.label}</span>
+              </Button>)}
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">圖示大字是新安裝的預設樣式，以圖示與較大的百分比呈現，不顯示時間；既有樣式會保留。兩種額度樣式固定顯示剩餘額度：Claude／Codex 為 Session、Weekly；Antigravity 為 Gemini、Claude 並列。S／W 表示兩個週期，Gemini 與 Claude 各用自己的圖示。雙額度與倒數保留原有詳細資訊，倒數由原生背景更新。</p>
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">預覽只列部分；實際依已啟用服務顯示。缺資料顯示 --，不當作零或 100%。</p>
+            <p className="mt-4 mb-2 text-xs font-medium">自動選擇的額度偏好</p>
+            <Choices label="選單列額度偏好" options={MENUBAR_METRIC_OPTIONS} value={props.menubarMetric} onChange={props.onMenubarMetricChange} />
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">額度偏好用於服務圖示、圓環與長條。圖示大字及雙額度與倒數的 Gemini 預設 Pro，可在「服務與模型」選 Flash；Claude 固定同時顯示，兩種額度不混加。</p>
+          </SettingCard>
+          <SettingCard title="額度顯示方式" description="選擇百分比與進度條表示已用量或剩餘額度。">
+            <Choices label="額度顯示方式" options={DISPLAY_MODE_OPTIONS} value={props.displayMode} onChange={props.onDisplayModeChange} />
+          </SettingCard>
+          <SettingCard title="介面主題" description="跟隨系統外觀，或固定使用淺色與深色。">
+            <Choices label="介面主題" options={THEME_OPTIONS} value={props.themeMode} onChange={props.onThemeModeChange} />
+          </SettingCard>
+          <SettingCard title="額度重設時間" description="以倒數時間或實際日期與時間顯示。">
+            <Choices label="重設時間顯示方式" options={RESET_TIMER_DISPLAY_OPTIONS} value={props.resetTimerDisplayMode} onChange={props.onResetTimerDisplayModeChange}
+              example={(value) => value === "relative" ? "5 小時 12 分鐘" : `今天 ${timeExample(props.timeFormatMode)}`} />
+            <p className="mt-4 mb-2 text-xs font-medium">時間格式</p>
+            <Choices label="時間格式" options={TIME_FORMAT_OPTIONS} value={props.timeFormatMode} onChange={props.onTimeFormatModeChange} example={timeExample} />
+          </SettingCard>
+        </>}
+        {category === "services" && <div className="@min-[620px]:col-span-2"><ServiceSettings plugins={props.plugins} onReorder={props.onReorder} onToggle={props.onToggle} onMetricChange={props.onMetricChange} /></div>}
+        {category === "system" && <>
+          <SettingCard title="自動更新額度" description="定期取得服務用量；這個間隔不影響 App 版本更新。">
+            <Choices label="額度更新間隔" options={AUTO_UPDATE_OPTIONS} value={props.autoUpdateInterval} onChange={props.onAutoUpdateIntervalChange} />
+          </SettingCard>
+          <div className="rounded-xl border border-border/60 bg-card/70 p-3.5 shadow-sm">
+            <GlobalShortcutSection globalShortcut={props.globalShortcut} onGlobalShortcutChange={props.onGlobalShortcutChange} />
           </div>
-        </div>
-      </section>
-      <section>
-        <h3 className="text-lg font-semibold mb-0">Usage Mode</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          Glass half full or half empty
-        </p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Usage display mode">
-            {DISPLAY_MODE_OPTIONS.map((option) => {
-              const isActive = option.value === displayMode;
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1"
-                  onClick={() => onDisplayModeChange(option.value)}
-                >
-                  {option.label}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-      <section>
-        <h3 className="text-lg font-semibold mb-0">Reset Timers</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          Countdown or clock time
-        </p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Reset timer display mode">
-            {RESET_TIMER_DISPLAY_OPTIONS.map((option) => {
-              const isActive = option.value === resetTimerDisplayMode;
-              const absoluteTimeExample = getTimeFormatter(timeFormatMode).format(new Date(2026, 1, 2, 11, 4));
-              const example = option.value === "relative" ? "5h 12m" : `today at ${absoluteTimeExample}`;
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1 flex flex-col items-center gap-0 py-2 h-auto"
-                  onClick={() => onResetTimerDisplayModeChange(option.value)}
-                >
-                  <span>{option.label}</span>
-                  <span
-                    className={cn(
-                      "text-xs font-normal",
-                      isActive ? "text-primary-foreground/80" : "text-muted-foreground"
-                    )}
-                  >
-                    {example}
-                  </span>
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-      <section>
-        <h3 className="text-lg font-semibold mb-0">Time Format</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          12-hour or 24-hour clock
-        </p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Time format">
-            {TIME_FORMAT_OPTIONS.map((option) => {
-              const isActive = option.value === timeFormatMode;
-              const example = getTimeFormatter(option.value).format(new Date(2026, 1, 2, 11, 4));
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  aria-label={option.label}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1 flex flex-col items-center gap-0 py-2 h-auto"
-                  onClick={() => onTimeFormatModeChange(option.value)}
-                >
-                  <span>{option.label}</span>
-                  <span
-                    className={cn(
-                      "text-xs font-normal",
-                      isActive ? "text-primary-foreground/80" : "text-muted-foreground"
-                    )}
-                  >
-                    {example}
-                  </span>
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-      <section>
-        <h3 className="text-lg font-semibold mb-0">Menubar Icon</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          What shows in the menu bar
-        </p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Menubar icon style">
-            {MENUBAR_ICON_STYLE_OPTIONS.map((option) => {
-              const isActive = option.value === menubarIconStyle;
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-label={option.label}
-                  aria-checked={isActive}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1 h-9 flex items-center justify-center"
-                  onClick={() => onMenubarIconStyleChange(option.value)}
-                >
-                  <MenubarIconStylePreview
-                    style={option.value}
-                    isActive={isActive}
-                    traySettingsPreview={traySettingsPreview}
-                  />
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-        <p className="text-sm text-muted-foreground mt-3 mb-2">Metric</p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Menubar metric">
-            {MENUBAR_METRIC_OPTIONS.map((option) => {
-              const isActive = option.value === menubarMetric;
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-label={option.label}
-                  aria-checked={isActive}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1"
-                  onClick={() => onMenubarMetricChange(option.value)}
-                >
-                  {option.label}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-      <section>
-        <h3 className="text-lg font-semibold mb-0">App Theme</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          How it looks around here
-        </p>
-        <div className="bg-muted/50 rounded-lg p-1">
-          <div className="flex gap-1" role="radiogroup" aria-label="Theme mode">
-            {THEME_OPTIONS.map((option) => {
-              const isActive = option.value === themeMode;
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={isActive}
-                  variant={isActive ? "default" : "outline"}
-                  size="sm"
-                  className="flex-1"
-                  onClick={() => onThemeModeChange(option.value)}
-                >
-                  {option.label}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-      <GlobalShortcutSection
-        globalShortcut={globalShortcut}
-        onGlobalShortcutChange={onGlobalShortcutChange}
-      />
-      <section>
-        <h3 className="text-lg font-semibold mb-0">Start on Login</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          OpenUsage starts when you sign in
-        </p>
-        <label className="flex items-center gap-2 text-sm select-none text-foreground">
-          <Checkbox
-            key={`start-on-login-${startOnLogin}`}
-            checked={startOnLogin}
-            onCheckedChange={(checked) => onStartOnLoginChange(checked === true)}
-          />
-          Start on login
-        </label>
-      </section>
-      <section>
-        <h3 className="text-lg font-semibold mb-0">Plugins</h3>
-        <p className="text-sm text-muted-foreground mb-2">
-          Your AI coding lineup
-        </p>
-        <div className="bg-muted/50 rounded-lg p-1 space-y-1">
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext
-              items={plugins.map((p) => p.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              {plugins.map((plugin) => (
-                <SortablePluginItem
-                  key={plugin.id}
-                  plugin={plugin}
-                  onToggle={onToggle}
-                />
-              ))}
-            </SortableContext>
-          </DndContext>
-        </div>
-      </section>
+          <SettingCard title="登入時啟動" description={`登入 macOS 後自動開啟 ${APP_DISPLAY_NAME}。`}>
+            <label className="flex cursor-pointer items-center justify-between gap-2 text-sm">
+              登入時自動啟動
+              <Checkbox aria-label="登入時自動啟動" checked={props.startOnLogin} onCheckedChange={(checked) => props.onStartOnLoginChange(checked === true)} />
+            </label>
+          </SettingCard>
+          {IS_TEST_BUILD && <SettingCard title="App 版本更新" description="這是獨立版本，已停用上游自動更新。">
+            <span className="inline-flex rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">獨立版手動更新</span>
+          </SettingCard>}
+        </>}
+      </div>
     </div>
   );
 }

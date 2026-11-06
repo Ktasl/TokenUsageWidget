@@ -119,6 +119,7 @@
       try {
         value = ctx.host.env.get(name)
       } catch (e) {
+        if (String(e).includes("ENV_LOOKUP_UNAVAILABLE")) throw e
         ctx.host.log.warn("env read failed for " + name + ": " + String(e))
       }
       const key = readString(value)
@@ -143,6 +144,7 @@
     try {
       cnApiKeyValue = ctx.host.env.get("MINIMAX_CN_API_KEY")
     } catch (e) {
+      if (String(e).includes("ENV_LOOKUP_UNAVAILABLE")) throw e
       ctx.host.log.warn("env read failed for MINIMAX_CN_API_KEY: " + String(e))
     }
     if (readString(cnApiKeyValue)) return ["CN", "GLOBAL"]

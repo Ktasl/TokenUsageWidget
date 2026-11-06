@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import { isTauri } from "@tauri-apps/api/core"
 import { check, type Update } from "@tauri-apps/plugin-updater"
 import { relaunch } from "@tauri-apps/plugin-process"
+import { IS_TEST_BUILD } from "@/lib/app-edition"
 
 export type UpdateStatus =
   | { status: "idle" }
@@ -33,7 +34,7 @@ export function useAppUpdate(): UseAppUpdateReturn {
   }, [])
 
   const checkForUpdates = useCallback(async () => {
-    if (!isTauri()) return
+    if (IS_TEST_BUILD || !isTauri()) return
     if (inFlightRef.current.checking || inFlightRef.current.downloading || inFlightRef.current.installing) return
     if (statusRef.current.status === "ready") return
 
@@ -101,6 +102,7 @@ export function useAppUpdate(): UseAppUpdateReturn {
   }, [setStatus])
 
   useEffect(() => {
+    if (IS_TEST_BUILD) return
     mountedRef.current = true
     void checkForUpdates()
 
@@ -119,6 +121,7 @@ export function useAppUpdate(): UseAppUpdateReturn {
   }, [checkForUpdates])
 
   const triggerInstall = useCallback(async () => {
+    if (IS_TEST_BUILD) return
     const update = updateRef.current
     if (!update) return
     if (statusRef.current.status !== "ready") return

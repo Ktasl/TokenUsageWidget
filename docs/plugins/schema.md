@@ -103,13 +103,18 @@ loading skeletons instantly while probes execute asynchronously.
 
 ### Primary Progress (Tray Icon)
 
-Progress lines opt into the system tray icon by setting `primaryOrder` (a number). Lines are sorted by `primaryOrder` into an ordered list of candidates, and the tray shows the **first candidate that has runtime data** — falling back to the next when an earlier one is absent. This lets a provider prefer a short-window metric but degrade gracefully when it isn't reported.
+Progress lines can declare `primaryOrder` (a number) to prefer a metric in the system tray. Each provider uses the first candidate with valid runtime quota: finite used/limit values and a positive limit. If its declared primary metrics are absent or invalid, it tries the manifest's overview progress lines in their declared order. A provider with no primary metric can also appear through this overview fallback. For example, Antigravity can show Gemini Flash or Claude quota when Gemini Pro is unavailable.
+
+Settings also lets the user choose a menu bar metric per provider, or use automatic selection. A valid saved choice takes priority over the global Weekly/default preference. If that metric is temporarily missing or invalid, automatic selection is used until the chosen quota is available again; its saved choice is kept. Metric labels and provider output are not renamed.
 
 Rules:
 - Only `type: "progress"` lines are candidates (`primaryOrder` is ignored on other types)
-- Lower `primaryOrder` wins; the frontend walks the ordered list and uses the first one present in live data
-- Up to 4 enabled plugins are shown in the tray (in plugin order)
-- If no data is available yet, the bar shows as a track without fill
+- Lower `primaryOrder` wins; the frontend walks the ordered list and uses the first one with valid quota before trying overview progress lines
+- Plugin style shows every enabled provider with a numeric quota, in plugin order, as its icon and percentage. There is no four-provider limit in this style. A valid 0% remains visible; providers without quota data are omitted until data is available.
+- Bars style shows up to 4 enabled plugins; a missing value appears as a track without fill.
+- Donut style follows the selected provider, or the last selected provider when returning to Overview or Settings.
+- The display mode still selects used or remaining quota. Each provider shows one selected metric; Weekly replaces the default metric rather than adding another percentage.
+- These icons share one menu bar item. Clicking it still opens the existing overview panel with all enabled providers.
 
 Example:
 
@@ -128,7 +133,7 @@ Example:
 
 A provider can mark one progress line with `"period": "weekly"`. When the user sets the menubar metric to **Weekly** (Settings → Menubar Icon), the tray icon and tooltip show this line instead of the provider's primary metric.
 
-It is an **override of the primary metric**, not a standalone mode: the provider must still define a primary (`primaryOrder`) line — a provider with *only* a weekly line will not appear in the menubar. Providers without a weekly line keep showing their primary. `period` only recognizes `"weekly"` (other values are ignored), and only the first `"period": "weekly"` line is used.
+Weekly is preferred when it has valid quota. If it is absent or invalid, the provider falls back to its primary metrics and then overview progress lines. A separate primary line is not required. `period` only recognizes `"weekly"` (other values are ignored), and only the first `"period": "weekly"` line is used.
 
 ```json
 {
@@ -155,8 +160,42 @@ globalThis.__openusage_plugin = {
 `probe(ctx)` must return (or resolve to):
 
 ```javascript
-{ lines: MetricLine[] }
+{ lines: MetricLine[], tokenUsageReport?: TokenUsageReport }
 ```
+
+### Local Token Report (TokenUsageWidget)
+
+The Claude/Codex adapters may also emit a detail text line labeled `Local estimated cost`: a dollar value and a subtitle with the accepted local date range and known-cost day coverage. This is an estimate from local records/API pricing, not a subscription invoice. Duplicate/conflicting cost observations are not added, and future Taipei dates are excluded. `Extra usage spent` remains a separate provider-reported metric; the UI never adds it to the local estimate or treats missing cost as zero.
+
+Antigravity emits a quota progress line only for a finite source fraction in `[0,1]`. A missing or invalid fraction is an explicit unknown text line, not exhausted quota. An explicit zero remains valid; missing/invalid reset information is omitted rather than invented.
+
+`tokenUsageReport` is optional and separate from quota lines. A failed optional report must not discard a quota that was already fetched. It contains only daily statistics, never session content or credentials.
+
+```typescript
+type TokenUsageReport = {
+  status: "ok" | "unavailable" | "invalid" | "unverified"
+  timezone: "Asia/Taipei"
+  source: "local-logs"
+  accountScope: "local-directory"
+  sourceId?: string // opaque dataset identity, not a path or authenticated account ID
+  sourceVersion?: string
+  reason?: string // fixed classification, never a raw error or response
+  days: Array<{
+    date: string // valid YYYY-MM-DD in the confirmed source timezone
+    totalTokens: number
+    inputTokens?: number
+    outputTokens?: number
+    cachedTokens?: number
+    models?: Array<{ name: string; totalTokens: number }>
+  }>
+}
+```
+
+Counts must be explicit nonnegative safe integers. Missing counts are unknown; an explicit zero is valid. The total comes from the source and is never reconstructed by adding overlapping input/cache fields. Model totals must not exceed the daily total; the remainder is unclassified. Identical duplicate days are deduplicated; conflicting days invalidate the report instead of being added.
+
+The Claude/Codex adapters request 31 calendar days, including today, in Asia/Taipei. Weeks start Monday. Future days are excluded; a missing day is not zero. Daily aggregates do not retain reliable project, conversation, child-agent or authenticated-account attribution. A local directory may contain more than one account's records. Antigravity has no Token report without an actual source.
+
+Unavailable/invalid reports have no accepted days. Reasons include `no_runner`, `timed_out`, `probe_budget_exhausted`, `runner_failed`, `timezone_unconfirmed`, `legacy_duplicate_risk`, and fixed invalid/conflicting daily/model classifications. Codex legacy 18.0.11 reports are withheld because its aggregated output cannot safely resolve known duplicate records.
 
 ### Line Types
 

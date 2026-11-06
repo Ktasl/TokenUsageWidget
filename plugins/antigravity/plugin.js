@@ -383,15 +383,25 @@
 
   var QUOTA_PERIOD_MS = 5 * 60 * 60 * 1000 // 5 hours
 
+  function validRemainingFraction(value) {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1 ? value : null
+  }
+
+  function sourceResetTime(value) {
+    return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value)) ? value : undefined
+  }
+
   function modelLine(ctx, label, remainingFraction, resetTime) {
-    var clamped = Math.max(0, Math.min(1, remainingFraction))
-    var used = Math.round((1 - clamped) * 100)
+    if (validRemainingFraction(remainingFraction) === null) {
+      return ctx.line.text({ label: label, value: "未提供有效額度" })
+    }
+    var used = Math.round((1 - remainingFraction) * 100)
     return ctx.line.progress({
       label: label,
       used: used,
       limit: 100,
       format: { kind: "percent" },
-      resetsAt: resetTime || undefined,
+      resetsAt: sourceResetTime(resetTime),
       periodDurationMs: QUOTA_PERIOD_MS,
     })
   }
@@ -403,10 +413,10 @@
       var label = (typeof c.label === "string") ? c.label.trim() : ""
       if (!label) continue
       var qi = c.quotaInfo
-      var frac = (qi && typeof qi.remainingFraction === "number") ? qi.remainingFraction : 0
+      var frac = validRemainingFraction(qi && typeof qi === "object" ? qi.remainingFraction : undefined)
       var rtime = (qi && qi.resetTime) || undefined
       var pool = poolLabel(normalizeLabel(label))
-      if (!deduped[pool] || frac < deduped[pool].remainingFraction) {
+      if (!deduped[pool] || (frac !== null && (deduped[pool].remainingFraction === null || frac < deduped[pool].remainingFraction))) {
         deduped[pool] = {
           label: pool,
           remainingFraction: frac,
@@ -492,7 +502,7 @@
         ""
       if (!displayName) continue
       var qi = m.quotaInfo
-      var frac = (qi && typeof qi.remainingFraction === "number") ? qi.remainingFraction : 0
+      var frac = qi ? qi.remainingFraction : undefined
       var rtime = (qi && qi.resetTime) || undefined
       configs.push({
         label: displayName,
@@ -523,7 +533,7 @@
       if (!bucket || typeof bucket !== "object") continue
       var modelId = (typeof bucket.modelId === "string" && bucket.modelId.trim()) || ""
       if (!modelId) continue
-      var frac = (typeof bucket.remainingFraction === "number") ? bucket.remainingFraction : 0
+      var frac = bucket.remainingFraction
       configs.push({
         label: modelId,
         quotaInfo: { remainingFraction: frac, resetTime: bucket.resetTime || undefined },

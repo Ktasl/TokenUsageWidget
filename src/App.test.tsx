@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
@@ -338,6 +338,7 @@ describe("App", () => {
     })
     state.resolveResourceMock.mockResolvedValue("/resource/icons/tray-icon.png")
     state.invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_desktop_widget_state") return { pinned: false, clickThrough: false }
       if (cmd === "list_plugins") {
         return [
           { id: "a", name: "Alpha", iconUrl: "icon-a", primaryProgressLabel: null, lines: [{ type: "text", label: "Now", scope: "overview" }] },
@@ -381,19 +382,19 @@ describe("App", () => {
     const mmSpy = vi.spyOn(window, "matchMedia").mockReturnValue(mq)
 
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
 
     // Dark
-    await userEvent.click(await screen.findByRole("radio", { name: "Dark" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "深色" }))
     expect(document.documentElement.classList.contains("dark")).toBe(true)
 
     // Light
-    await userEvent.click(await screen.findByRole("radio", { name: "Light" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "淺色" }))
     expect(document.documentElement.classList.contains("dark")).toBe(false)
 
     // Back to system should subscribe to matchMedia changes
-    await userEvent.click(await screen.findByRole("radio", { name: "System" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "跟隨系統" }))
     expect(mq.addEventListener).toHaveBeenCalled()
 
     mmSpy.mockRestore()
@@ -598,7 +599,34 @@ describe("App", () => {
     expect(state.traySetTitleMock).not.toHaveBeenCalled()
   })
 
-  it("uses selected provider on detail view and keeps it on home/settings", async () => {
+  it("changes the saved per-service metric through Settings and updates the menu bar", async () => {
+    state.invokeMock.mockImplementation(async (cmd: string) => cmd === "list_plugins" ? [{
+      id: "antigravity", name: "Antigravity", iconUrl: "antigravity.svg", primaryCandidates: ["Gemini Pro"],
+      lines: ["Gemini Pro", "Gemini Flash", "Claude"].map((label) => ({ type: "progress", label, scope: "overview" })),
+    }] : null)
+    state.loadPluginSettingsMock.mockResolvedValueOnce({ order: ["antigravity"], disabled: [] })
+    render(<App />)
+    await waitFor(() => expect(state.startBatchMock).toHaveBeenCalled())
+    act(() => state.probeHandlers?.onResult({
+      providerId: "antigravity", displayName: "Antigravity", iconUrl: "antigravity.svg",
+      lines: [
+        { type: "progress", label: "Gemini Flash", used: 10, limit: 100, format: { kind: "percent" } },
+        { type: "progress", label: "Claude", used: 40, limit: 100, format: { kind: "percent" } },
+      ],
+    }))
+    await waitFor(() => expect(state.traySetTitleMock).toHaveBeenLastCalledWith("90%"))
+    await userEvent.click(await screen.findByRole("button", { name: "設定" }))
+    await userEvent.click(await screen.findByRole("tab", { name: "服務與模型" }))
+    const metric = screen.getByRole("combobox", { name: "Antigravity 的選單列模型／額度" })
+    await userEvent.selectOptions(metric, "Claude")
+    expect(state.savePluginSettingsMock).toHaveBeenLastCalledWith({ order: ["antigravity"], disabled: [], menubarMetrics: { antigravity: "Claude" } })
+    await waitFor(() => expect(state.traySetTitleMock).toHaveBeenLastCalledWith("60%"))
+    await userEvent.selectOptions(metric, "")
+    expect(state.savePluginSettingsMock).toHaveBeenLastCalledWith({ order: ["antigravity"], disabled: [] })
+    await waitFor(() => expect(state.traySetTitleMock).toHaveBeenLastCalledWith("90%"))
+  })
+
+  it("keeps all providers in Plugin style on detail, home and settings", async () => {
     state.invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_plugins") {
         return [
@@ -643,24 +671,24 @@ describe("App", () => {
 
     await waitFor(() => {
       const latestCall = state.renderTrayBarsIconMock.mock.calls.at(-1)?.[0]
-      expect(latestCall.providerIconUrl).toBe("icon-b")
+      expect(latestCall.providerItems.map((item: { id: string }) => item.id)).toEqual(["a", "b"])
     })
-    await waitFor(() => expect(state.traySetTitleMock).toHaveBeenCalledWith("70%"))
+    await waitFor(() => expect(state.traySetTitleMock).toHaveBeenLastCalledWith(""))
 
-    await userEvent.click(screen.getByRole("button", { name: "Home" }))
+    await userEvent.click(screen.getByRole("button", { name: "總覽" }))
     await waitFor(() => {
       const latestCall = state.renderTrayBarsIconMock.mock.calls.at(-1)?.[0]
-      expect(latestCall.providerIconUrl).toBe("icon-b")
+      expect(latestCall.providerItems.map((item: { id: string }) => item.id)).toEqual(["a", "b"])
     })
-    await waitFor(() => expect(state.traySetTitleMock).toHaveBeenCalledWith("70%"))
+    await waitFor(() => expect(state.traySetTitleMock).toHaveBeenLastCalledWith(""))
 
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
     await waitFor(() => {
       const latestCall = state.renderTrayBarsIconMock.mock.calls.at(-1)?.[0]
-      expect(latestCall.providerIconUrl).toBe("icon-b")
+      expect(latestCall.providerItems.map((item: { id: string }) => item.id)).toEqual(["a", "b"])
     })
-    await waitFor(() => expect(state.traySetTitleMock).toHaveBeenCalledWith("70%"))
+    await waitFor(() => expect(state.traySetTitleMock).toHaveBeenLastCalledWith(""))
   })
 
   it("covers about open/close callbacks", async () => {
@@ -668,31 +696,31 @@ describe("App", () => {
 
     // Open about via version button in footer
     await userEvent.click(await screen.findByRole("button", { name: /OpenUsage/i }))
-    await screen.findByText("Built by")
+    await screen.findByText("原作者：")
 
     // Close about via ESC key
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
     await waitFor(() => {
-      expect(screen.queryByText("Built by")).not.toBeInTheDocument()
+      expect(screen.queryByText("原作者：")).not.toBeInTheDocument()
     })
   })
 
   it("updates display mode in settings", async () => {
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
 
-    await userEvent.click(await screen.findByRole("radio", { name: "Used" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "已用" }))
     expect(state.saveDisplayModeMock).toHaveBeenCalledWith("used")
   })
 
   it("settings UI persists menubar icon style change", async () => {
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
 
-    expect(screen.getByText("Menubar Icon")).toBeVisible()
-    const barsRadio = await screen.findByRole("radio", { name: "Bars" })
+    expect(screen.getByText("選單列顯示")).toBeVisible()
+    const barsRadio = await screen.findByRole("radio", { name: "長條" })
     await userEvent.click(barsRadio)
     expect(state.saveMenubarIconStyleMock).toHaveBeenCalledWith("bars")
 
@@ -705,11 +733,11 @@ describe("App", () => {
 
   it("settings UI persists donut menubar icon style change", async () => {
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
 
-    expect(screen.getByText("Menubar Icon")).toBeVisible()
-    const donutRadio = await screen.findByRole("radio", { name: "Donut" })
+    expect(screen.getByText("選單列顯示")).toBeVisible()
+    const donutRadio = await screen.findByRole("radio", { name: "圓環" })
     await userEvent.click(donutRadio)
     expect(state.saveMenubarIconStyleMock).toHaveBeenCalledWith("donut")
 
@@ -755,10 +783,10 @@ describe("App", () => {
       ],
     })
 
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
 
-    await userEvent.click(await screen.findByRole("radio", { name: "Weekly" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "每週" }))
     expect(state.saveMenubarMetricMock).toHaveBeenCalledWith("weekly")
 
     await waitFor(() => {
@@ -816,9 +844,9 @@ describe("App", () => {
       lines: [{ type: "progress", label: "Credits", used: 55, limit: 100, format: { kind: "percent" } }],
     })
 
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
-    await userEvent.click(await screen.findByRole("radio", { name: "Weekly" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "每週" }))
 
     // Cursor has no weekly line -> falls back to its primary, so the list is mixed
     // and every line gets a metric tag.
@@ -834,10 +862,10 @@ describe("App", () => {
     state.saveDisplayModeMock.mockRejectedValueOnce(new Error("save display mode"))
 
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
 
-    await userEvent.click(await screen.findByRole("radio", { name: "Used" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "已用" }))
     await waitFor(() => expect(errorSpy).toHaveBeenCalled())
 
     errorSpy.mockRestore()
@@ -845,7 +873,7 @@ describe("App", () => {
 
   it("does not render legacy bar icon controls in settings", async () => {
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
     expect(screen.queryByText("Bar Icon")).not.toBeInTheDocument()
     expect(screen.queryByText("Show percentage")).not.toBeInTheDocument()
@@ -855,12 +883,12 @@ describe("App", () => {
     state.isTauriMock.mockReturnValue(true)
     render(<App />)
 
-    await waitFor(() => expect(eventState.listenMock).toHaveBeenCalled())
+    await waitFor(() => expect(eventState.handlers.has("tray:navigate")).toBe(true))
     const handler = eventState.handlers.get("tray:navigate")
     expect(handler).toBeTruthy()
     handler?.({ payload: "nope" })
 
-    await screen.findByText("Provider not found")
+    await screen.findByText("找不到此服務")
   })
 
   it("hides the panel on Escape when running in Tauri", async () => {
@@ -879,8 +907,9 @@ describe("App", () => {
     // because "b" is not in DEFAULT_ENABLED_PLUGINS = ["claude","codex","cursor"])
     state.loadPluginSettingsMock.mockResolvedValue({ order: ["a", "b"], disabled: ["b"] })
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "服務與模型" }))
     // Re-query before each click: the Checkbox remounts on each toggle because
     // its key includes plugin.enabled, so the reference goes stale after click 1.
     await userEvent.click((await screen.findAllByRole("checkbox")).at(-1)!)
@@ -891,9 +920,10 @@ describe("App", () => {
 
   it("updates auto-update interval in settings", async () => {
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
-    await userEvent.click(await screen.findByRole("radio", { name: "30 min" }))
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "30分鐘" }))
     expect(state.saveAutoUpdateIntervalMock).toHaveBeenCalledWith(30)
   })
 
@@ -901,18 +931,20 @@ describe("App", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     state.saveAutoUpdateIntervalMock.mockRejectedValueOnce(new Error("save interval"))
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
-    await userEvent.click(await screen.findByRole("radio", { name: "30 min" }))
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "30分鐘" }))
     await waitFor(() => expect(errorSpy).toHaveBeenCalled())
     errorSpy.mockRestore()
   })
 
   it("updates start on login in settings", async () => {
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
-    await userEvent.click(await screen.findByText("Start on login"))
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
+    await userEvent.click(await screen.findByText("登入時自動啟動"))
     expect(state.saveStartOnLoginMock).toHaveBeenCalledWith(true)
   })
 
@@ -933,9 +965,10 @@ describe("App", () => {
     state.saveStartOnLoginMock.mockRejectedValueOnce(new Error("save start on login failed"))
 
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
-    await userEvent.click(await screen.findByText("Start on login"))
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
+    await userEvent.click(await screen.findByText("登入時自動啟動"))
 
     await waitFor(() =>
       expect(errorSpy).toHaveBeenCalledWith("Failed to save start on login:", expect.any(Error))
@@ -966,9 +999,10 @@ describe("App", () => {
       .mockRejectedValueOnce(new Error("toggle failed"))
 
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
-    await userEvent.click(await screen.findByText("Start on login"))
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
+    await userEvent.click(await screen.findByText("登入時自動啟動"))
 
     await waitFor(() =>
       expect(errorSpy).toHaveBeenCalledWith("Failed to update start on login:", expect.any(Error))
@@ -1015,9 +1049,9 @@ describe("App", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     state.saveThemeModeMock.mockRejectedValueOnce(new Error("save theme"))
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
-    await userEvent.click(await screen.findByRole("radio", { name: "Light" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "淺色" }))
     await waitFor(() => expect(errorSpy).toHaveBeenCalled())
     errorSpy.mockRestore()
   })
@@ -1027,9 +1061,9 @@ describe("App", () => {
     state.saveMenubarIconStyleMock.mockRejectedValueOnce(new Error("save menubar icon style failed"))
 
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
-    await userEvent.click(await screen.findByRole("radio", { name: "Bars" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "長條" }))
 
     await waitFor(() =>
       expect(errorSpy).toHaveBeenCalledWith("Failed to save menubar icon style:", expect.any(Error))
@@ -1046,7 +1080,7 @@ describe("App", () => {
       iconUrl: "icon-a",
       lines: [{ type: "badge", label: "Error", text: "Bad" }],
     })
-    const retry = await screen.findByRole("button", { name: "Retry" })
+    const retry = await screen.findByRole("button", { name: "重新整理" })
     await userEvent.click(retry)
     expect(state.startBatchMock).toHaveBeenCalledWith(["a"])
   })
@@ -1086,7 +1120,7 @@ describe("App", () => {
       iconUrl: "icon-b",
       lines: [{ type: "text", label: "Now", value: "OK" }],
     })
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2))
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "重新整理" })).toHaveLength(2))
     state.startBatchMock.mockClear()
     const reloadAction = await triggerPluginContextAction("Beta", "b", "reload")
     const firstReloadConfig = menuState.iconMenuItemConfigs.find((item) => item.id === "ctx-reload-b")
@@ -1100,7 +1134,7 @@ describe("App", () => {
       iconUrl: "icon-b",
       lines: [{ type: "text", label: "Now", value: "OK" }],
     })
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1))
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "重新整理" })).toHaveLength(1))
 
     state.startBatchMock.mockClear()
     const cooldownReloadAction = await triggerPluginContextAction("Beta", "b", "reload")
@@ -1109,6 +1143,28 @@ describe("App", () => {
     cooldownReloadAction()
 
     expect(state.startBatchMock).not.toHaveBeenCalled()
+  })
+
+  it("allows sidebar reload after an error despite a recent successful manual refresh", async () => {
+    state.loadPluginSettingsMock.mockResolvedValueOnce({ order: ["a"], disabled: [] })
+    render(<App />)
+    await waitFor(() => expect(state.startBatchMock).toHaveBeenCalled())
+    const success = { providerId: "a", displayName: "Alpha", iconUrl: "icon-a",
+      lines: [{ type: "text" as const, label: "Now", value: "OK" }] }
+    act(() => state.probeHandlers?.onResult(success))
+    const firstReload = await triggerPluginContextAction("Alpha", "a", "reload")
+    act(() => firstReload())
+    await waitFor(() => expect(state.startBatchMock).toHaveBeenCalledTimes(2))
+    act(() => state.probeHandlers?.onResult(success))
+    act(() => state.probeHandlers?.onResult({ ...success,
+      lines: [{ type: "badge", label: "Error", text: "Timed out" }],
+    }))
+    state.startBatchMock.mockClear()
+    const retry = await triggerPluginContextAction("Alpha", "a", "reload")
+    const config = menuState.iconMenuItemConfigs.find((item) => item.id === "ctx-reload-a")
+    expect(config?.enabled).toBe(true)
+    act(() => retry())
+    await waitFor(() => expect(state.startBatchMock).toHaveBeenCalledWith(["a"]))
   })
 
   it("closes sidebar context menu resources after popup", async () => {
@@ -1190,15 +1246,15 @@ describe("App", () => {
         expect.objectContaining({ disabled: expect.arrayContaining(["a"]) })
       )
     )
-    await screen.findByText("No providers enabled")
-    expect(screen.queryByText("Provider not found")).not.toBeInTheDocument()
+    await screen.findByText("尚未啟用服務")
+    expect(screen.queryByText("找不到此服務")).not.toBeInTheDocument()
   })
 
   it("shows empty state when all plugins disabled", async () => {
     state.loadPluginSettingsMock.mockResolvedValueOnce({ order: ["a", "b"], disabled: ["a", "b"] })
     render(<App />)
-    await screen.findByText("No providers enabled")
-    expect(screen.getByText("Paused")).toBeInTheDocument()
+    await screen.findByText("尚未啟用服務")
+    expect(screen.getByText("已暫停")).toBeInTheDocument()
   })
 
   it("handles plugin list load failure", async () => {
@@ -1232,8 +1288,9 @@ describe("App", () => {
       .mockRejectedValueOnce(new Error("enable fail"))
     state.savePluginSettingsMock.mockRejectedValueOnce(new Error("save fail"))
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "服務與模型" }))
     const checkboxes = await screen.findAllByRole("checkbox")
     const targetCheckbox = checkboxes[checkboxes.length - 1]
     await userEvent.click(targetCheckbox)
@@ -1245,8 +1302,9 @@ describe("App", () => {
   it("enables disabled plugin and starts batch", async () => {
     state.loadPluginSettingsMock.mockResolvedValueOnce({ order: ["a", "b"], disabled: ["b"] })
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "服務與模型" }))
     const checkboxes = await screen.findAllByRole("checkbox")
     const targetCheckbox = checkboxes[checkboxes.length - 1]
     await userEvent.click(targetCheckbox)
@@ -1298,8 +1356,9 @@ describe("App", () => {
     state.savePluginSettingsMock.mockRejectedValueOnce(new Error("save order"))
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "服務與模型" }))
     dndState.latestOnDragEnd?.({ active: { id: "a" }, over: { id: "b" } })
     await waitFor(() => expect(errorSpy).toHaveBeenCalled())
     errorSpy.mockRestore()
@@ -1307,8 +1366,9 @@ describe("App", () => {
 
   it("handles reordering plugins", async () => {
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "服務與模型" }))
     dndState.latestOnDragEnd?.({ active: { id: "a" }, over: { id: "b" } })
     expect(state.savePluginSettingsMock).toHaveBeenCalled()
   })
@@ -1396,8 +1456,9 @@ describe("App", () => {
   it("coalesces pending tray icon timers on multiple settings changes", async () => {
     state.loadPluginSettingsMock.mockResolvedValueOnce({ order: ["a", "b"], disabled: [] })
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "服務與模型" }))
 
     // Toggle then reorder quickly (within debounce window) to force timer replacement.
     const checkboxes = await screen.findAllByRole("checkbox")
@@ -1440,7 +1501,7 @@ describe("App", () => {
     // Make startBatch reject on next call (the retry)
     state.startBatchMock.mockRejectedValueOnce(new Error("retry failed"))
 
-    const retry = await screen.findByRole("button", { name: "Retry" })
+    const retry = await screen.findByRole("button", { name: "重新整理" })
     await userEvent.click(retry)
 
     await waitFor(() =>
@@ -1455,11 +1516,12 @@ describe("App", () => {
     render(<App />)
 
     // Go to settings
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
 
     // Change interval - this triggers the else branch (enabledIds.length === 0)
-    await userEvent.click(await screen.findByRole("radio", { name: "30 min" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "30分鐘" }))
 
     expect(state.saveAutoUpdateIntervalMock).toHaveBeenCalledWith(30)
   })
@@ -1470,11 +1532,12 @@ describe("App", () => {
     state.loadPluginSettingsMock.mockResolvedValueOnce({ order: ["a", "b"], disabled: [] })
     render(<App />)
 
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
 
     // Change interval - this triggers the if branch (enabledIds.length > 0)
-    await userEvent.click(await screen.findByRole("radio", { name: "1 hour" }))
+    await userEvent.click(await screen.findByRole("radio", { name: "1小時" }))
 
     expect(state.saveAutoUpdateIntervalMock).toHaveBeenCalledWith(60)
   })
@@ -1591,10 +1654,10 @@ describe("App", () => {
       iconUrl: "icon-b",
       lines: [],
     })
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2))
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "重新整理" })).toHaveLength(2))
 
     const initialCalls = state.startBatchMock.mock.calls.length
-    const refreshButton = await screen.findByRole("button", { name: /Next update in/i })
+    const refreshButton = await screen.findByRole("button", { name: /後更新用量/ })
     await userEvent.click(refreshButton)
 
     await waitFor(() =>
@@ -1620,12 +1683,12 @@ describe("App", () => {
       iconUrl: "icon-b",
       lines: [],
     })
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2))
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "重新整理" })).toHaveLength(2))
 
     const initialCalls = state.startBatchMock.mock.calls.length
     state.startBatchMock.mockImplementation(() => new Promise(() => {}))
 
-    const refreshButton = await screen.findByRole("button", { name: /Next update in/i })
+    const refreshButton = await screen.findByRole("button", { name: /後更新用量/ })
     await userEvent.click(refreshButton)
     await userEvent.click(refreshButton)
     await userEvent.click(refreshButton)
@@ -1649,10 +1712,10 @@ describe("App", () => {
         iconUrl: "icon-a",
         lines: [{ type: "text", label: "Now", value: "OK" }],
       })
-      await screen.findByRole("button", { name: "Retry" })
+      await screen.findByRole("button", { name: "重新整理" })
 
       state.startBatchMock.mockRejectedValueOnce(new Error("refresh all failed"))
-      const refreshButton = await screen.findByRole("button", { name: /Next update in/i })
+      const refreshButton = await screen.findByRole("button", { name: /後更新用量/ })
       await userEvent.click(refreshButton)
 
       await waitFor(() =>
@@ -1677,7 +1740,7 @@ describe("App", () => {
         iconUrl: "icon-a",
         lines: [{ type: "badge", label: "Error", text: "Network error" }],
       })
-      await screen.findByRole("button", { name: "Retry" })
+      await screen.findByRole("button", { name: "重新整理" })
     } finally {
       errorSpy.mockRestore()
     }
@@ -1695,7 +1758,7 @@ describe("App", () => {
       lines: [{ type: "badge", label: "Error", text: "Network error" }],
     })
 
-    const retryButton = await screen.findByRole("button", { name: "Retry" })
+    const retryButton = await screen.findByRole("button", { name: "重新整理" })
     await userEvent.click(retryButton)
 
     // Simulate successful probe result after retry (isManual branch)
@@ -1733,7 +1796,7 @@ describe("App", () => {
     })
 
     // Find and prepare to click retry
-    const retryButton = await screen.findByRole("button", { name: "Retry" })
+    const retryButton = await screen.findByRole("button", { name: "重新整理" })
 
     // Before clicking, disable "a" to make enabledIds.length === 0 when resetAutoUpdateSchedule runs
     // This simulates a race condition where settings change mid-action
@@ -1751,14 +1814,15 @@ describe("App", () => {
     state.loadGlobalShortcutMock.mockResolvedValueOnce("CommandOrControl+Shift+U")
 
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
 
     // The shortcut should be displayed
     await screen.findByText(/Cmd \+ Shift \+ U/i)
 
     // Find and click the clear button (X icon)
-    const clearButton = await screen.findByRole("button", { name: /clear shortcut/i })
+    const clearButton = await screen.findByRole("button", { name: /清除快捷鍵/ })
     await userEvent.click(clearButton)
 
     // Clearing should save null and invoke update_global_shortcut with null
@@ -1774,8 +1838,9 @@ describe("App", () => {
     state.loadGlobalShortcutMock.mockResolvedValueOnce("CommandOrControl+Shift+O")
 
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
 
     // The shortcut should be displayed (formatted version)
     await screen.findByText(/Cmd \+ Shift \+ O/i)
@@ -1785,11 +1850,12 @@ describe("App", () => {
     state.loadGlobalShortcutMock.mockResolvedValueOnce(null)
 
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
 
     // Should show the placeholder text (appears twice: as main text and as hint)
-    const placeholders = await screen.findAllByText(/Click to set/i)
+    const placeholders = await screen.findAllByText(/點選設定/)
     expect(placeholders.length).toBeGreaterThan(0)
   })
 
@@ -1812,11 +1878,12 @@ describe("App", () => {
     state.saveGlobalShortcutMock.mockRejectedValueOnce(new Error("save shortcut failed"))
 
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
 
     // Clear the shortcut to trigger save
-    const clearButton = await screen.findByRole("button", { name: /clear shortcut/i })
+    const clearButton = await screen.findByRole("button", { name: /清除快捷鍵/ })
     await userEvent.click(clearButton)
 
     await waitFor(() =>
@@ -1843,11 +1910,12 @@ describe("App", () => {
     })
 
     render(<App />)
-    const settingsButtons = await screen.findAllByRole("button", { name: "Settings" })
+    const settingsButtons = await screen.findAllByRole("button", { name: "設定" })
     await userEvent.click(settingsButtons[0])
+    await userEvent.click(await screen.findByRole("tab", { name: "更新與系統" }))
 
     // Clear the shortcut to trigger invoke
-    const clearButton = await screen.findByRole("button", { name: /clear shortcut/i })
+    const clearButton = await screen.findByRole("button", { name: /清除快捷鍵/ })
     await userEvent.click(clearButton)
 
     await waitFor(() =>

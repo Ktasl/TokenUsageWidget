@@ -212,10 +212,44 @@ describe("useSettingsPluginActions", () => {
     act(() => {
       result.current.handleReorder(["a"])
       result.current.handleToggle("a")
+      result.current.handleMetricChange("a", "Claude")
     })
 
     expect(setPluginSettings).not.toHaveBeenCalled()
     expect(savePluginSettingsMock).not.toHaveBeenCalled()
+  })
+
+  it("persists a raw per-provider metric, refreshes the tray and resets to automatic without probing", () => {
+    const setPluginSettings = vi.fn()
+    const scheduleTrayIconUpdate = vi.fn()
+    const startBatch = vi.fn()
+    const args = {
+      pluginSettings: { order: ["antigravity"], disabled: [], menubarMetrics: { antigravity: "Gemini Flash" } },
+      setPluginSettings, scheduleTrayIconUpdate, startBatch,
+      setLoadingForPlugins: vi.fn(), setErrorForPlugins: vi.fn(),
+    }
+    const { result } = renderHook(() => useSettingsPluginActions(args))
+    act(() => result.current.handleMetricChange("antigravity", "Claude"))
+    const expected = { ...args.pluginSettings, menubarMetrics: { antigravity: "Claude" } }
+    expect(setPluginSettings).toHaveBeenLastCalledWith(expected)
+    expect(savePluginSettingsMock).toHaveBeenLastCalledWith(expected)
+    expect(scheduleTrayIconUpdate).toHaveBeenLastCalledWith("settings", 0)
+    expect(startBatch).not.toHaveBeenCalled()
+    act(() => result.current.handleMetricChange("antigravity", ""))
+    expect(savePluginSettingsMock).toHaveBeenLastCalledWith({ order: ["antigravity"], disabled: [] })
+  })
+
+  it("keeps chosen metrics through reordering and enabling providers", () => {
+    const setPluginSettings = vi.fn()
+    const pluginSettings = { order: ["a", "b"], disabled: ["b"], menubarMetrics: { a: "Weekly", b: "Claude" } }
+    const { result } = renderHook(() => useSettingsPluginActions({
+      pluginSettings, setPluginSettings, startBatch: vi.fn().mockResolvedValue([]),
+      scheduleTrayIconUpdate: vi.fn(), setLoadingForPlugins: vi.fn(), setErrorForPlugins: vi.fn(),
+    }))
+    act(() => result.current.handleReorder(["b", "a"]))
+    expect(setPluginSettings.mock.calls.at(-1)?.[0].menubarMetrics).toEqual(pluginSettings.menubarMetrics)
+    act(() => result.current.handleToggle("b"))
+    expect(setPluginSettings.mock.calls.at(-1)?.[0].menubarMetrics).toEqual(pluginSettings.menubarMetrics)
   })
 
   it("logs errors when enabling probe start fails", async () => {

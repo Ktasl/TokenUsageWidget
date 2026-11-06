@@ -1,4 +1,5 @@
-import { act, renderHook, waitFor } from "@testing-library/react"
+import { createElement } from "react"
+import { act, render, renderHook, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const {
@@ -38,7 +39,7 @@ vi.mock("@tauri-apps/api/window", () => ({
   },
 }))
 
-import { usePanel } from "@/hooks/app/use-panel"
+import { getPanelWidth, usePanel } from "@/hooks/app/use-panel"
 
 describe("usePanel", () => {
   beforeEach(() => {
@@ -340,5 +341,41 @@ describe("usePanel", () => {
 
     document.body.removeChild(container)
     requestAnimationFrameSpy.mockRestore()
+  })
+})
+
+
+describe("dashboard panel width", () => {
+  it("uses the dashboard width while fitting narrow monitors", () => {
+    expect(getPanelWidth(1440)).toBe(820)
+    expect(getPanelWidth(600)).toBe(576)
+    expect(getPanelWidth(390)).toBe(366)
+  })
+})
+
+
+describe("dashboard monitor changes", () => {
+  it("remeasures the monitor on each tray show even when already on home", async () => {
+    invokeMock.mockResolvedValue(undefined)
+    const callbacks = new Map<string, () => void>()
+    listenMock.mockImplementation(async (event: string, callback: () => void) => {
+      callbacks.set(event, callback)
+      return vi.fn()
+    })
+    isTauriMock.mockReturnValue(true)
+    currentMonitorMock.mockResolvedValue({ size: { width: 1440, height: 900 }, scaleFactor: 1 })
+    const setSize = vi.fn().mockResolvedValue(undefined)
+    getCurrentWindowMock.mockReturnValue({ setSize })
+    const args = { activeView: "home", setActiveView: vi.fn(), showAbout: false, setShowAbout: vi.fn(), displayPlugins: [] }
+    function Harness() {
+      const panel = usePanel(args)
+      return createElement("div", { ref: panel.containerRef })
+    }
+    render(createElement(Harness))
+    await waitFor(() => expect(setSize).toHaveBeenCalledWith(expect.objectContaining({ width: 820 })))
+    currentMonitorMock.mockResolvedValue({ size: { width: 600, height: 900 }, scaleFactor: 1 })
+    act(() => callbacks.get("tray:shown")?.())
+    await waitFor(() => expect(setSize).toHaveBeenLastCalledWith(expect.objectContaining({ width: 576 })))
+    expect(invokeMock).toHaveBeenCalledWith("reposition_panel")
   })
 })

@@ -6,12 +6,16 @@ use aes_gcm::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use rquickjs::{function::Rest, Ctx, Exception, Function, Object};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+mod terminal_env;
+mod command_output;
+use command_output::CommandOutput;
 
 const WHITELISTED_ENV_VARS: [&str; 16] = [
     "CODEX_HOME",
@@ -97,49 +101,25 @@ fn sanitize_env_value(text: &str) -> Option<String> {
     last_non_empty_trimmed_line(&cleaned)
 }
 
-fn extract_marked_value(text: &str, start_marker: &str, end_marker: &str) -> Option<String> {
-    let start = text.find(start_marker)?;
-    let after_start = &text[start + start_marker.len()..];
-    let end = after_start.find(end_marker)?;
-    sanitize_env_value(&after_start[..end])
-}
-
-fn parse_interactive_shell_env_output(
-    text: &str,
-    start_marker: &str,
-    end_marker: &str,
-) -> Option<String> {
-    if let Some(marked) = extract_marked_value(text, start_marker, end_marker) {
-        return Some(marked);
-    }
-
-    let has_complete_markers = text.contains(start_marker) && text.contains(end_marker);
-    if has_complete_markers {
-        return None;
-    }
-
-    sanitize_env_value(text)
-}
-
 fn read_env_from_process(name: &str) -> Option<String> {
     let value = std::env::var(name).ok()?;
     sanitize_env_value(&value)
 }
 
-fn read_command_stdout(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
+fn read_command_stdout(program: &str, args: &[&str], deadline: ProbeDeadline) -> Option<String> {
+    let output = Command::new(program).args(args).output_before(deadline).ok()?;
     if !output.status.success() {
         return None;
     }
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn read_env_value_via_command(program: &str, args: &[&str]) -> Option<String> {
-    let stdout = read_command_stdout(program, args)?;
+fn read_env_value_via_command(program: &str, args: &[&str], deadline: ProbeDeadline) -> Option<String> {
+    let stdout = read_command_stdout(program, args, deadline)?;
     sanitize_env_value(&stdout)
 }
 
-fn current_macos_keychain_account_from_user_env(user_env: Option<String>) -> String {
+fn current_macos_keychain_account_from_user_env(user_env: Option<String>, deadline: ProbeDeadline) -> String {
     user_env
         .and_then(|value| {
             let trimmed = value.trim();
@@ -149,12 +129,12 @@ fn current_macos_keychain_account_from_user_env(user_env: Option<String>) -> Str
                 Some(trimmed.to_string())
             }
         })
-        .or_else(|| read_env_value_via_command("id", &["-un"]))
+        .or_else(|| read_env_value_via_command("id", &["-un"], deadline))
         .unwrap_or_else(|| "openusage-user".to_string())
 }
 
-fn current_macos_keychain_account() -> String {
-    current_macos_keychain_account_from_user_env(read_env_from_process("USER"))
+fn current_macos_keychain_account(deadline: ProbeDeadline) -> String {
+    current_macos_keychain_account_from_user_env(read_env_from_process("USER"), deadline)
 }
 
 fn keychain_find_generic_password_args(service: &str) -> Vec<OsString> {
@@ -203,85 +183,6 @@ fn keychain_add_generic_password_args_for_account(
         OsString::from("-w"),
         OsString::from(value),
     ]
-}
-
-fn terminal_env_cache() -> &'static Mutex<HashMap<String, Option<String>>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn shell_from_env() -> Option<String> {
-    let shell = std::env::var("SHELL").ok()?;
-    let trimmed = shell.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let file = std::path::Path::new(trimmed).file_name()?.to_string_lossy();
-    let allowed = file == "zsh" || file == "bash" || file == "fish";
-    if allowed {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
-}
-
-fn read_env_from_interactive_shell(program: &str, name: &str) -> Option<String> {
-    const START_MARKER: &str = "__OPENUSAGE_ENV_START__";
-    const END_MARKER: &str = "__OPENUSAGE_ENV_END__";
-
-    let script = format!(
-        "printf '{}\\n'; printenv {}; printf '{}\\n'",
-        START_MARKER, name, END_MARKER
-    );
-    let output = read_command_stdout(program, &["-ilc", script.as_str()])?;
-    parse_interactive_shell_env_output(&output, START_MARKER, END_MARKER)
-}
-
-fn read_env_from_interactive_shells(name: &str) -> Option<String> {
-    let mut programs: Vec<String> = Vec::new();
-
-    if let Some(shell) = shell_from_env() {
-        programs.push(shell);
-    }
-
-    for program in [
-        "/bin/zsh",
-        "/bin/bash",
-        "/opt/homebrew/bin/fish",
-        "/usr/local/bin/fish",
-        "/opt/local/bin/fish",
-    ] {
-        if !programs.iter().any(|p| p == program) {
-            programs.push(program.to_string());
-        }
-    }
-
-    for program in programs {
-        if let Some(value) = read_env_from_interactive_shell(program.as_str(), name) {
-            return Some(value);
-        }
-    }
-
-    None
-}
-
-fn resolve_env_value(name: &str) -> Option<String> {
-    // Prefer the current process env (fast + supports launchctl/terminal-launch).
-    if let Some(value) = read_env_from_process(name) {
-        return Some(value);
-    }
-
-    if let Ok(cache) = terminal_env_cache().lock() {
-        if let Some(cached) = cache.get(name) {
-            return cached.clone();
-        }
-    }
-
-    let resolved = read_env_from_interactive_shells(name);
-    if let Ok(mut cache) = terminal_env_cache().lock() {
-        cache.insert(name.to_string(), resolved.clone());
-    }
-    resolved
 }
 
 /// Redact sensitive value to first4...last4 format (UTF-8 safe)
@@ -632,11 +533,11 @@ pub(crate) fn inject_host_api_with_deadline<'js>(
     inject_log(ctx, &host, plugin_id)?;
     inject_fs(ctx, &host)?;
     inject_crypto(ctx, &host)?;
-    inject_env(ctx, &host, plugin_id)?;
+    inject_env(ctx, &host, deadline)?;
     inject_http(ctx, &host, plugin_id, deadline)?;
-    inject_keychain(ctx, &host, plugin_id)?;
-    inject_sqlite(ctx, &host)?;
-    inject_ls(ctx, &host, plugin_id)?;
+    inject_keychain(ctx, &host, plugin_id, deadline)?;
+    inject_sqlite(ctx, &host, deadline)?;
+    inject_ls(ctx, &host, plugin_id, deadline)?;
     inject_ccusage(ctx, &host, plugin_id, deadline)?;
 
     probe_ctx.set("host", host)?;
@@ -792,16 +693,24 @@ fn inject_crypto<'js>(ctx: &Ctx<'js>, host: &Object<'js>) -> rquickjs::Result<()
     Ok(())
 }
 
-fn inject_env<'js>(ctx: &Ctx<'js>, host: &Object<'js>, _plugin_id: &str) -> rquickjs::Result<()> {
+fn inject_env<'js>(ctx: &Ctx<'js>, host: &Object<'js>, deadline: ProbeDeadline) -> rquickjs::Result<()> {
+    inject_env_with_resolver(ctx, host, move |name| terminal_env::resolve(name, deadline))
+}
+
+fn inject_env_with_resolver<'js, F>(ctx: &Ctx<'js>, host: &Object<'js>, resolver: F) -> rquickjs::Result<()>
+where
+    F: Fn(&str) -> Result<Option<String>, terminal_env::EnvError> + 'js,
+{
     let env_obj = Object::new(ctx.clone())?;
     env_obj.set(
         "get",
-        Function::new(ctx.clone(), move |name: String| -> Option<String> {
+        Function::new(ctx.clone(), move |ctx: Ctx<'_>, name: String| -> rquickjs::Result<Option<String>> {
             if !WHITELISTED_ENV_VARS.contains(&name.as_str()) {
-                return None;
+                return Ok(None);
             }
-
-            resolve_env_value(&name)
+            resolver(&name).map_err(|_| Exception::throw_message(
+                &ctx, "登入環境初始化失敗（ENV_LOOKUP_UNAVAILABLE），請稍後重新整理",
+            ))
         })?,
     )?;
     host.set("env", env_obj)?;
@@ -1315,7 +1224,7 @@ struct LsDiscoverResult {
     extension_port: Option<i32>,
 }
 
-fn inject_ls<'js>(ctx: &Ctx<'js>, host: &Object<'js>, plugin_id: &str) -> rquickjs::Result<()> {
+fn inject_ls<'js>(ctx: &Ctx<'js>, host: &Object<'js>, plugin_id: &str, deadline: ProbeDeadline) -> rquickjs::Result<()> {
     let ls_obj = Object::new(ctx.clone())?;
     let pid = plugin_id.to_string();
 
@@ -1337,7 +1246,7 @@ fn inject_ls<'js>(ctx: &Ctx<'js>, host: &Object<'js>, plugin_id: &str) -> rquick
 
                 let ps_output = match std::process::Command::new("/bin/ps")
                     .args(["-ax", "-o", "pid=,command="])
-                    .output()
+                    .output_before(deadline)
                 {
                     Ok(o) => o,
                     Err(e) => {
@@ -1444,7 +1353,7 @@ fn inject_ls<'js>(ctx: &Ctx<'js>, host: &Object<'js>, plugin_id: &str) -> rquick
                                 "-p",
                                 &process_pid.to_string(),
                             ])
-                            .output()
+                            .output_before(deadline)
                         {
                             Ok(o) if o.status.success() => {
                                 ls_parse_listening_ports(&String::from_utf8_lossy(&o.stdout))
@@ -1634,6 +1543,26 @@ const CCUSAGE_LEGACY_CODEX_PACKAGE_NAME: &str = "@ccusage/codex";
 const CCUSAGE_LEGACY_CODEX_BIN_NAME: &str = "ccusage-codex";
 const CCUSAGE_TIMEOUT_SECS: u64 = 15;
 const CCUSAGE_POLL_INTERVAL_MS: u64 = 100;
+const CCUSAGE_QUERY_BUDGET: Duration = Duration::from_secs(8);
+const CCUSAGE_PROBE_RETURN_RESERVE: Duration = Duration::from_secs(2);
+
+// Token totals are optional. All runner/package attempts share one budget, and must
+// leave time for the plugin to return quota data it already fetched.
+fn ccusage_query_deadline(probe: ProbeDeadline, now: Instant) -> Option<ProbeDeadline> {
+    let cap = now + CCUSAGE_QUERY_BUDGET;
+    let expires_at = match probe.expires_at {
+        Some(probe_end) => probe_end.checked_sub(CCUSAGE_PROBE_RETURN_RESERVE)?.min(cap),
+        None => cap,
+    };
+    expires_at
+        .checked_duration_since(now)
+        .filter(|remaining| *remaining >= MIN_BLOCKING_TIMEOUT)
+        .map(|_| ProbeDeadline::at(expires_at))
+}
+
+#[cfg(test)]
+#[path = "host_api/ccusage_budget_tests.rs"]
+mod ccusage_budget_tests;
 
 #[derive(Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1641,8 +1570,20 @@ struct CcusageQueryOpts {
     provider: Option<String>,
     since: Option<String>,
     until: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_ccusage_timezone")]
+    timezone: Option<String>,
     home_path: Option<String>,
     claude_path: Option<String>,
+}
+
+fn deserialize_ccusage_timezone<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where D: serde::Deserializer<'de>,
+{
+    let timezone = <Option<String> as serde::Deserialize>::deserialize(deserializer)?;
+    match timezone.as_deref() {
+        None | Some("Asia/Taipei" | "UTC") => Ok(timezone),
+        _ => Err(serde::de::Error::custom("unsupported statistics timezone")),
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -1785,6 +1726,46 @@ fn ccusage_home_override<'a>(
     }
 }
 
+// A directory-dataset identity, never an account identity. No path is exported.
+fn ccusage_source_id(opts: &CcusageQueryOpts, provider: CcusageProvider) -> Option<String> {
+    let config = ccusage_provider_config(provider);
+    let mut hasher = Sha256::new();
+    hasher.update(b"tokenusagewidget-local-directory-v1\0");
+    hasher.update(config.home_env_var.as_bytes());
+    hasher.update(b"\0");
+    let override_path = ccusage_home_override(opts, provider).map(OsString::from)
+        .or_else(|| std::env::var_os(config.home_env_var));
+    if let Some(path) = override_path {
+        let expanded = PathBuf::from(expand_path(&path.to_string_lossy()));
+        // Relative configuration depends on working directory; include its actual base.
+        let absolute = if expanded.is_absolute() { expanded } else { std::env::current_dir().ok()?.join(expanded) };
+        hasher.update(absolute.as_os_str().as_encoded_bytes());
+    } else {
+        let home = dirs::home_dir()?;
+        hasher.update(home.as_os_str().as_encoded_bytes());
+        // Default loaders can consider more than one config directory.
+        hasher.update(b"\0default-source-set\0");
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") { hasher.update(xdg.as_encoded_bytes()); }
+    }
+    Some(hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[cfg(test)]
+mod source_scope_tests {
+    use super::*;
+    #[test]
+    fn ccusage_source_scope_is_stable_opaque_and_provider_directory_separated() {
+        let a = CcusageQueryOpts { home_path: Some("/fixture/one".into()), ..Default::default() };
+        let b = CcusageQueryOpts { home_path: Some("/fixture/two".into()), ..Default::default() };
+        let id = ccusage_source_id(&a, CcusageProvider::Claude).unwrap();
+        assert_eq!(id.len(), 64);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(Some(id.clone()), ccusage_source_id(&a, CcusageProvider::Claude));
+        assert_ne!(Some(id.clone()), ccusage_source_id(&a, CcusageProvider::Codex));
+        assert_ne!(Some(id), ccusage_source_id(&b, CcusageProvider::Claude));
+    }
+}
+
 fn ccusage_runner_candidates(kind: CcusageRunnerKind) -> Vec<String> {
     let mut candidates: Vec<String> = Vec::new();
     match kind {
@@ -1905,16 +1886,25 @@ fn ccusage_enriched_path() -> Option<OsString> {
 }
 
 fn ccusage_runner_available(candidate: &str, enriched_path: Option<&OsStr>) -> bool {
-    let mut command = std::process::Command::new(candidate);
-    command.arg("--version");
-    if let Some(path) = enriched_path {
-        command.env("PATH", path);
+    fn executable_file(path: &Path) -> bool {
+        let Ok(metadata) = path.metadata() else { return false };
+        if !metadata.is_file() { return false; }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(not(unix))]
+        { true }
     }
-    command
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
 
-    command.status().map(|s| s.success()).unwrap_or(false)
+    let candidate_path = Path::new(candidate);
+    if candidate_path.components().count() > 1 {
+        return executable_file(candidate_path);
+    }
+    let path = enriched_path.map(OsStr::to_os_string).or_else(|| std::env::var_os("PATH"));
+    path.map(|path| std::env::split_paths(&path).any(|dir| executable_file(&dir.join(candidate))))
+        .unwrap_or(false)
 }
 
 fn configure_ccusage_command(
@@ -1980,6 +1970,10 @@ fn append_ccusage_common_args(
         "--order".to_string(),
         "desc".to_string(),
     ]);
+
+    if let Some(timezone) = &opts.timezone {
+        args.extend(["--timezone".to_string(), timezone.clone()]);
+    }
 
     if let Some(since) = opts
         .since
@@ -2157,13 +2151,13 @@ fn run_ccusage_with_runner_deadline(
     deadline: ProbeDeadline,
 ) -> CcusageRunnerResult {
     if deadline.has_elapsed() {
-        log::warn!("[plugin:{}] ccusage skipped: probe timed out", plugin_id);
+        log::warn!("[plugin:{}] ccusage skipped: query budget exhausted", plugin_id);
         return CcusageRunnerResult::TimedOut;
     }
 
     let Some(current_timeout) = deadline.clamp_duration(Duration::from_secs(CCUSAGE_TIMEOUT_SECS))
     else {
-        log_probe_deadline_skip(plugin_id, "ccusage");
+        log::warn!("[plugin:{}] ccusage skipped: query budget exhausted", plugin_id);
         return CcusageRunnerResult::TimedOut;
     };
 
@@ -2182,7 +2176,7 @@ fn run_ccusage_with_runner_deadline(
             let Some(legacy_timeout) =
                 deadline.clamp_duration(Duration::from_secs(CCUSAGE_TIMEOUT_SECS))
             else {
-                log_probe_deadline_skip(plugin_id, "ccusage legacy fallback");
+                log::warn!("[plugin:{}] ccusage legacy fallback skipped: query budget exhausted", plugin_id);
                 return CcusageRunnerResult::TimedOut;
             };
             run_ccusage_with_runner_timeout(
@@ -2259,9 +2253,25 @@ fn run_ccusage_with_runner_timeout(
     });
 
     let start = std::time::Instant::now();
+    let mut exited_status = None;
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
+        if exited_status.is_none() {
+            match child.try_wait() {
+                Ok(status) => exited_status = status,
+                Err(e) => {
+                    log::warn!("[plugin:{}] ccusage wait failed for {}: {}", plugin_id, ccusage_runner_label(kind), e);
+                    let _ = kill_ccusage_on_timeout(&mut child);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return CcusageRunnerResult::Failed;
+                }
+            }
+        }
+        if let Some(status) = exited_status {
+            // A wrapper can exit while a descendant still holds its pipes open.
+            // Never join those readers until they finished, even after parent exit.
+            if stdout_reader.as_ref().map(|r| r.is_finished()).unwrap_or(true)
+                && stderr_reader.as_ref().map(|r| r.is_finished()).unwrap_or(true) {
                 let stdout = stdout_reader
                     .take()
                     .and_then(|reader| reader.join().ok())
@@ -2274,7 +2284,12 @@ fn run_ccusage_with_runner_timeout(
                 if status.success() {
                     let out = String::from_utf8_lossy(&stdout);
                     if let Some(normalized_json) = normalize_ccusage_output(&out) {
-                        return CcusageRunnerResult::Success(normalized_json);
+                        let mut data: serde_json::Value = serde_json::from_str(&normalized_json).expect("normalized JSON");
+                        data["sourceVersion"] = serde_json::json!(match flavor {
+                            CcusageCommandFlavor::Current => CCUSAGE_VERSION,
+                            CcusageCommandFlavor::Legacy => CCUSAGE_LEGACY_VERSION,
+                        });
+                        return CcusageRunnerResult::Success(data.to_string());
                     }
                     log::warn!(
                         "[plugin:{}] ccusage output parse failed for {}",
@@ -2293,7 +2308,7 @@ fn run_ccusage_with_runner_timeout(
                 );
                 return CcusageRunnerResult::Failed;
             }
-            Ok(None) => {
+        }
                 if start.elapsed() > timeout {
                     if let Err(e) = kill_ccusage_on_timeout(&mut child) {
                         log::warn!(
@@ -2305,8 +2320,9 @@ fn run_ccusage_with_runner_timeout(
                         let _ = child.kill();
                     }
                     let _ = child.wait();
-                    let _ = stdout_reader.take().and_then(|reader| reader.join().ok());
-                    let _ = stderr_reader.take().and_then(|reader| reader.join().ok());
+                    // Drop unfinished reader handles instead of blocking on join.
+                    // Killing the process group closes normal inherited pipes; if
+                    // cleanup fails, an optional statistic must still return.
                     log::warn!(
                         "[plugin:{}] ccusage timed out after {} for {}",
                         plugin_id,
@@ -2316,17 +2332,6 @@ fn run_ccusage_with_runner_timeout(
                     return CcusageRunnerResult::TimedOut;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(CCUSAGE_POLL_INTERVAL_MS));
-            }
-            Err(e) => {
-                log::warn!(
-                    "[plugin:{}] ccusage wait failed for {}: {}",
-                    plugin_id,
-                    ccusage_runner_label(kind),
-                    e
-                );
-                return CcusageRunnerResult::Failed;
-            }
-        }
     }
 }
 
@@ -2335,6 +2340,7 @@ fn run_ccusage_query_with_runners<F>(
     opts: &CcusageQueryOpts,
     provider: CcusageProvider,
     plugin_id: &str,
+    deadline: ProbeDeadline,
     mut run: F,
 ) -> String
 where
@@ -2355,6 +2361,10 @@ where
     }
 
     for (kind, program) in runners {
+        if deadline.clamp_duration(CCUSAGE_QUERY_BUDGET).is_none() {
+            log::warn!("[plugin:{}] ccusage query budget exhausted; skipping fallback runners", plugin_id);
+            return serde_json::json!({ "status": "runner_failed", "reason": "timed_out" }).to_string();
+        }
         match run(kind, &program, opts, provider, plugin_id) {
             CcusageRunnerResult::Success(result) => {
                 let data: serde_json::Value = match serde_json::from_str(&result) {
@@ -2368,7 +2378,7 @@ where
                         continue;
                     }
                 };
-                return serde_json::json!({ "status": "ok", "data": data }).to_string();
+                return serde_json::json!({ "status": "ok", "timezone": opts.timezone, "sourceVersion": data.get("sourceVersion"), "sourceId": ccusage_source_id(opts, provider), "data": data }).to_string();
             }
             CcusageRunnerResult::Failed => {}
             CcusageRunnerResult::TimedOut => {
@@ -2376,7 +2386,7 @@ where
                     "[plugin:{}] ccusage query timed out; skipping fallback runners",
                     plugin_id
                 );
-                return serde_json::json!({ "status": "runner_failed" }).to_string();
+                return serde_json::json!({ "status": "runner_failed", "reason": "timed_out" }).to_string();
             }
         }
     }
@@ -2406,7 +2416,7 @@ fn inject_ccusage<'js>(
                     Ok(v) => v,
                     Err(e) => {
                         log::warn!("[plugin:{}] invalid ccusage opts JSON: {}", pid, e);
-                        CcusageQueryOpts::default()
+                        return Ok(serde_json::json!({ "status": "runner_failed", "reason": "invalid_options" }).to_string());
                     }
                 };
                 let provider = resolve_ccusage_provider(&opts, &pid);
@@ -2414,15 +2424,20 @@ fn inject_ccusage<'js>(
                     log::warn!("[plugin:{}] ccusage query already running", pid);
                     return Ok(serde_json::json!({ "status": "runner_failed" }).to_string());
                 };
+                let Some(query_deadline) = ccusage_query_deadline(deadline, Instant::now()) else {
+                    log::warn!("[plugin:{}] ccusage skipped: insufficient probe budget to preserve quota response", pid);
+                    return Ok(serde_json::json!({ "status": "runner_failed", "reason": "probe_budget_exhausted" }).to_string());
+                };
                 let runners = collect_ccusage_runners();
                 Ok(run_ccusage_query_with_runners(
                     runners,
                     &opts,
                     provider,
                     &pid,
+                    query_deadline,
                     |kind, program, opts, provider, plugin_id| {
                         run_ccusage_with_runner_deadline(
-                            kind, program, opts, provider, plugin_id, deadline,
+                            kind, program, opts, provider, plugin_id, query_deadline,
                         )
                     },
                 ))
@@ -2459,6 +2474,7 @@ fn inject_keychain<'js>(
     ctx: &Ctx<'js>,
     host: &Object<'js>,
     plugin_id: &str,
+    deadline: ProbeDeadline,
 ) -> rquickjs::Result<()> {
     let keychain_obj = Object::new(ctx.clone())?;
     let pid_read = plugin_id.to_string();
@@ -2508,7 +2524,7 @@ fn inject_keychain<'js>(
                 };
                 let output = std::process::Command::new("security")
                     .args(args)
-                    .output()
+                    .output_before(deadline)
                     .map_err(|e| {
                         Exception::throw_message(
                             &ctx_inner,
@@ -2572,7 +2588,7 @@ fn inject_keychain<'js>(
                         "keychain API is only supported on macOS",
                     ));
                 }
-                let account = current_macos_keychain_account();
+                let account = current_macos_keychain_account(deadline);
                 let args = keychain_find_generic_password_args_for_account(&service, &account);
                 let redacted_account = redact_value(&account);
                 log::info!(
@@ -2583,7 +2599,7 @@ fn inject_keychain<'js>(
                 );
                 let output = std::process::Command::new("security")
                     .args(&args)
-                    .output()
+                    .output_before(deadline)
                     .map_err(|e| {
                         Exception::throw_message(
                             &ctx_inner,
@@ -2635,7 +2651,7 @@ fn inject_keychain<'js>(
                 let mut account_arg: Option<String> = None;
                 let find_output = std::process::Command::new("security")
                     .args(["find-generic-password", "-s", &service])
-                    .output();
+                    .output_before(deadline);
 
                 if let Ok(output) = find_output {
                     if output.status.success() {
@@ -2657,11 +2673,11 @@ fn inject_keychain<'js>(
                         .args(keychain_add_generic_password_args_for_account(
                             &service, acct, &value,
                         ))
-                        .output()
+                        .output_before(deadline)
                 } else {
                     std::process::Command::new("security")
                         .args(keychain_add_generic_password_args(&service, &value))
-                        .output()
+                        .output_before(deadline)
                 }
                 .map_err(|e| {
                     Exception::throw_message(&ctx_inner, &format!("keychain write failed: {}", e))
@@ -2704,7 +2720,7 @@ fn inject_keychain<'js>(
                         "keychain API is only supported on macOS",
                     ));
                 }
-                let account = current_macos_keychain_account();
+                let account = current_macos_keychain_account(deadline);
                 let args =
                     keychain_add_generic_password_args_for_account(&service, &account, &value);
                 let redacted_account = redact_value(&account);
@@ -2716,7 +2732,7 @@ fn inject_keychain<'js>(
                 );
                 let output = std::process::Command::new("security")
                     .args(&args)
-                    .output()
+                    .output_before(deadline)
                     .map_err(|e| {
                         Exception::throw_message(
                             &ctx_inner,
@@ -2755,7 +2771,7 @@ fn inject_keychain<'js>(
     Ok(())
 }
 
-fn inject_sqlite<'js>(ctx: &Ctx<'js>, host: &Object<'js>) -> rquickjs::Result<()> {
+fn inject_sqlite<'js>(ctx: &Ctx<'js>, host: &Object<'js>, deadline: ProbeDeadline) -> rquickjs::Result<()> {
     let sqlite_obj = Object::new(ctx.clone())?;
 
     sqlite_obj.set(
@@ -2775,7 +2791,7 @@ fn inject_sqlite<'js>(ctx: &Ctx<'js>, host: &Object<'js>) -> rquickjs::Result<()
                 // Fall back to immutable=1 to bypass WAL/SHM lock issues after macOS sleep.
                 let primary = std::process::Command::new("sqlite3")
                     .args(["-readonly", "-json", &expanded, &sql])
-                    .output()
+                    .output_before(deadline)
                     .map_err(|e| {
                         Exception::throw_message(&ctx_inner, &format!("sqlite3 exec failed: {}", e))
                     })?;
@@ -2793,7 +2809,7 @@ fn inject_sqlite<'js>(ctx: &Ctx<'js>, host: &Object<'js>) -> rquickjs::Result<()
                 let uri_path = format!("file:{}?immutable=1", encoded);
                 let fallback = std::process::Command::new("sqlite3")
                     .args(["-readonly", "-json", &uri_path, &sql])
-                    .output()
+                    .output_before(deadline)
                     .map_err(|e| {
                         Exception::throw_message(&ctx_inner, &format!("sqlite3 exec failed: {}", e))
                     })?;
@@ -2830,7 +2846,7 @@ fn inject_sqlite<'js>(ctx: &Ctx<'js>, host: &Object<'js>) -> rquickjs::Result<()
                 let expanded = expand_path(&db_path);
                 let output = std::process::Command::new("sqlite3")
                     .args([&expanded, &sql])
-                    .output()
+                    .output_before(deadline)
                     .map_err(|e| {
                         Exception::throw_message(&ctx_inner, &format!("sqlite3 exec failed: {}", e))
                     })?;
@@ -2984,64 +3000,6 @@ mod tests {
     fn sanitize_env_value_strips_ansi_and_control_sequences() {
         let raw = "\u{1b}[?1000l\n  sk-test-key-12345\u{1b}[?2004h\r\n";
         let value = sanitize_env_value(raw);
-        assert_eq!(value.as_deref(), Some("sk-test-key-12345"));
-    }
-
-    #[test]
-    fn extract_marked_value_ignores_noisy_shell_output() {
-        let stdout = concat!(
-            "startup banner\n",
-            "\u{1b}[31mplugin failed\u{1b}[0m\n",
-            "__OPENUSAGE_ENV_START__\n",
-            "  sk-test-key-12345  \n",
-            "__OPENUSAGE_ENV_END__\n",
-            "\u{1b}[32muser@host\u{1b}[0m\n"
-        );
-        let value =
-            extract_marked_value(stdout, "__OPENUSAGE_ENV_START__", "__OPENUSAGE_ENV_END__");
-        assert_eq!(value.as_deref(), Some("sk-test-key-12345"));
-    }
-
-    #[test]
-    fn extract_marked_value_strips_inline_terminal_sequences_from_marked_value() {
-        let stdout = concat!(
-            "__OPENUSAGE_ENV_START__\n",
-            "\u{1b}[?1000l\n",
-            "  sk-test-key-12345\u{1b}[?2004h\r\n",
-            "__OPENUSAGE_ENV_END__\n"
-        );
-        let value =
-            extract_marked_value(stdout, "__OPENUSAGE_ENV_START__", "__OPENUSAGE_ENV_END__");
-        assert_eq!(value.as_deref(), Some("sk-test-key-12345"));
-    }
-
-    #[test]
-    fn extract_marked_value_returns_none_when_marked_value_is_empty() {
-        let stdout = "__OPENUSAGE_ENV_START__\n  \n__OPENUSAGE_ENV_END__\n";
-        let value =
-            extract_marked_value(stdout, "__OPENUSAGE_ENV_START__", "__OPENUSAGE_ENV_END__");
-        assert!(value.is_none());
-    }
-
-    #[test]
-    fn parse_interactive_shell_env_output_does_not_fallback_to_end_marker_for_empty_value() {
-        let stdout = "__OPENUSAGE_ENV_START__\n  \n__OPENUSAGE_ENV_END__\n";
-        let value = parse_interactive_shell_env_output(
-            stdout,
-            "__OPENUSAGE_ENV_START__",
-            "__OPENUSAGE_ENV_END__",
-        );
-        assert!(value.is_none());
-    }
-
-    #[test]
-    fn parse_interactive_shell_env_output_falls_back_without_markers() {
-        let stdout = "\u{1b}[?1000l\n  sk-test-key-12345\u{1b}[?2004h\r\n";
-        let value = parse_interactive_shell_env_output(
-            stdout,
-            "__OPENUSAGE_ENV_START__",
-            "__OPENUSAGE_ENV_END__",
-        );
         assert_eq!(value.as_deref(), Some("sk-test-key-12345"));
     }
 
@@ -3240,6 +3198,12 @@ mod tests {
         ctx.with(|ctx| {
             let app_data = std::env::temp_dir();
             inject_host_api(&ctx, "test", &app_data, "0.0.0").expect("inject host api");
+            let probe_ctx: Object = ctx.globals().get("__openusage_ctx").unwrap();
+            let host: Object = probe_ctx.get("host").unwrap();
+            inject_env_with_resolver(&ctx, &host, |name| {
+                assert!(WHITELISTED_ENV_VARS.contains(&name));
+                Ok(Some(format!("fixture-{name}")))
+            }).unwrap();
             let globals = ctx.globals();
             let probe_ctx: Object = globals.get("__openusage_ctx").expect("probe ctx");
             let host: Object = probe_ctx.get("host").expect("host");
@@ -3247,7 +3211,7 @@ mod tests {
             let get: Function = env.get("get").expect("get");
 
             for name in WHITELISTED_ENV_VARS {
-                let expected = resolve_env_value(name);
+                let expected = Some(format!("fixture-{name}"));
                 let value: Option<String> =
                     get.call((name.to_string(),)).expect("get whitelisted var");
                 assert_eq!(value, expected, "{name} should match host env resolver");
@@ -3275,6 +3239,25 @@ mod tests {
                 js_blocked.is_none(),
                 "non-whitelisted vars must not be exposed from JS"
             );
+        });
+    }
+
+    #[test]
+    fn env_api_propagates_fixed_initialization_error_to_js() {
+        let rt = Runtime::new().unwrap();
+        let context = Context::full(&rt).unwrap();
+        context.with(|ctx| {
+            let host = Object::new(ctx.clone()).unwrap();
+            inject_env_with_resolver(&ctx, &host, |_| Err(terminal_env::EnvError::TimedOut)).unwrap();
+            ctx.globals().set("fixtureHost", host).unwrap();
+            let message: String = ctx.eval(r#"
+                try { fixtureHost.env.get('CLAUDE_CONFIG_DIR'); 'unexpected success'; }
+                catch (error) { String(error); }
+            "#).unwrap();
+            assert!(message.contains("ENV_LOOKUP_UNAVAILABLE"));
+            assert!(message.contains("請稍後重新整理"));
+            let blocked: Option<String> = ctx.eval("fixtureHost.env.get('PRIVATE_SECRET')").unwrap();
+            assert!(blocked.is_none());
         });
     }
 
@@ -3335,7 +3318,7 @@ mod tests {
     #[test]
     fn current_macos_keychain_account_prefers_explicit_user_value() {
         assert_eq!(
-            current_macos_keychain_account_from_user_env(Some("openusage-test-user".to_string())),
+            current_macos_keychain_account_from_user_env(Some("openusage-test-user".to_string()), ProbeDeadline::none()),
             "openusage-test-user"
         );
     }
@@ -3807,6 +3790,7 @@ mod tests {
             until: Some("20260131".to_string()),
             home_path: None,
             claude_path: None,
+            timezone: None,
         };
         let expected_ccusage_package = ccusage_package_spec();
         assert_eq!(expected_ccusage_package, "ccusage@20.0.2");
@@ -3941,6 +3925,7 @@ mod tests {
             until: Some("20260131".to_string()),
             home_path: None,
             claude_path: None,
+            timezone: None,
         };
         let expected_ccusage_package = ccusage_package_spec();
         let expected_npm_exec_package = format!("--package={expected_ccusage_package}");
@@ -4026,6 +4011,7 @@ mod tests {
             until: Some("20260131".to_string()),
             home_path: None,
             claude_path: None,
+            timezone: None,
         };
 
         let claude = ccusage_runner_args(
@@ -4256,6 +4242,7 @@ mod tests {
             until: None,
             home_path: None,
             claude_path: None,
+            timezone: None,
         };
         assert_eq!(
             resolve_ccusage_provider(&opts_explicit, "claude"),
@@ -4284,6 +4271,7 @@ mod tests {
             since: None,
             until: None,
             home_path: Some("/tmp/shared-home".to_string()),
+            timezone: None,
             claude_path: Some("/tmp/claude-home".to_string()),
         };
         assert_eq!(
@@ -4300,6 +4288,7 @@ mod tests {
             since: None,
             until: None,
             home_path: None,
+            timezone: None,
             claude_path: Some("/tmp/legacy-claude-path".to_string()),
         };
         assert_eq!(
@@ -4401,6 +4390,7 @@ Saved lockfile
             &opts,
             CcusageProvider::Codex,
             "codex",
+            ProbeDeadline::none(),
             |kind, _, _, _, _| {
                 calls.push(kind);
                 CcusageRunnerResult::TimedOut
@@ -4460,6 +4450,7 @@ esac
             until: None,
             home_path: None,
             claude_path: None,
+            timezone: None,
         };
         let result = run_ccusage_with_runner(
             CcusageRunnerKind::Bunx,
@@ -4470,7 +4461,7 @@ esac
         );
         assert_eq!(
             result,
-            CcusageRunnerResult::Success(r#"{"daily":[]}"#.to_string())
+            CcusageRunnerResult::Success(r#"{"daily":[],"sourceVersion":"18.0.11"}"#.to_string())
         );
 
         let calls = std::fs::read_to_string(&args_path).expect("read args log");
@@ -4581,12 +4572,12 @@ wait
             CcusageProvider::Codex,
             "codex",
             CcusageCommandFlavor::Current,
-            Duration::from_secs(1),
+            Duration::from_secs(3),
         );
 
         assert_eq!(result, CcusageRunnerResult::TimedOut);
         assert!(
-            start.elapsed() < Duration::from_secs(3),
+            start.elapsed() < Duration::from_secs(5),
             "timeout cleanup should not hang on inherited stdout/stderr pipes"
         );
 

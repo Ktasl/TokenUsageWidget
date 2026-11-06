@@ -351,6 +351,7 @@ mod tests {
                 subtitle: None,
             }],
             icon_url: String::new(),
+            token_usage_report: None,
         }
     }
 

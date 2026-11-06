@@ -1,5 +1,6 @@
 use crate::plugin_engine::host_api;
 use crate::plugin_engine::manifest::LoadedPlugin;
+use crate::plugin_engine::probe_diagnostics::{self, ProbeDiagnostics};
 use rquickjs::{Array, Context, Ctx, Error, Object, Promise, Runtime, Value};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -67,6 +68,8 @@ pub struct PluginOutput {
     pub plan: Option<String>,
     pub lines: Vec<MetricLine>,
     pub icon_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_usage_report: Option<super::token_report::TokenUsageReport>,
 }
 
 pub fn run_probe(plugin: &LoadedPlugin, app_data_dir: &PathBuf, app_version: &str) -> PluginOutput {
@@ -83,6 +86,22 @@ fn run_probe_with_timeout(
     app_data_dir: &PathBuf,
     app_version: &str,
     timeout: Duration,
+) -> PluginOutput {
+    let diagnostics = ProbeDiagnostics::new(&plugin.manifest.id);
+    let output = run_probe_inner(plugin, app_data_dir, app_version, timeout, diagnostics.clone());
+    let has_error = output.lines.iter().any(|line| {
+        matches!(line, MetricLine::Badge { label, .. } if label == "Error")
+    });
+    diagnostics.finish(has_error);
+    output
+}
+
+fn run_probe_inner(
+    plugin: &LoadedPlugin,
+    app_data_dir: &PathBuf,
+    app_version: &str,
+    timeout: Duration,
+    diagnostics: ProbeDiagnostics,
 ) -> PluginOutput {
     let fallback = error_output(plugin, "runtime error".to_string());
     let timeout_message = probe_timeout_message(timeout);
@@ -122,6 +141,9 @@ fn run_probe_with_timeout(
                 return error_output(plugin, timeout_message.clone());
             }
             return error_output(plugin, "host api injection failed".to_string());
+        }
+        if probe_diagnostics::inject(&ctx, diagnostics.clone()).is_err() {
+            return error_output(plugin, "probe diagnostics injection failed".to_string());
         }
         if host_api::patch_http_wrapper(&ctx).is_err() {
             if deadline.has_elapsed() {
@@ -222,12 +244,22 @@ fn run_probe_with_timeout(
             Err(msg) => vec![error_line(msg)],
         };
 
+        let token_usage_report = result.get::<_, Value>("tokenUsageReport").ok()
+            .filter(|v| !v.is_null() && !v.is_undefined())
+            .map(|v| {
+                ctx.json_stringify(v).ok().flatten().and_then(|s| s.to_string().ok())
+                    .and_then(|s| super::token_report::parse(&s)).unwrap_or_else(|| {
+                        log::error!("Token report validation failed");
+                        super::token_report::invalid()
+                    })
+            });
         PluginOutput {
             provider_id: plugin_id,
             display_name,
             plan,
             lines,
             icon_url,
+            token_usage_report,
         }
     })
 }
@@ -672,13 +704,14 @@ fn parse_bar_chart_line<'js>(
     )
 }
 
-fn error_output(plugin: &LoadedPlugin, message: String) -> PluginOutput {
+pub(crate) fn error_output(plugin: &LoadedPlugin, message: String) -> PluginOutput {
     PluginOutput {
         provider_id: plugin.manifest.id.clone(),
         display_name: plugin.manifest.name.clone(),
         plan: None,
         lines: vec![error_line(message)],
         icon_url: plugin.icon_data_url.clone(),
+        token_usage_report: None,
     }
 }
 
@@ -808,6 +841,30 @@ mod tests {
         );
 
         assert_eq!(error_text(output), "probe timed out after 5ms");
+    }
+
+    #[test]
+    fn run_probe_bounds_native_command_and_allows_two_later_updates() {
+        // A real synchronous host call cannot be stopped by QuickJS's JS interrupt.
+        // This in-memory fixture contains no user data and needs no account.
+        let slow = test_plugin(r#"
+            globalThis.__openusage_plugin = { probe(ctx) {
+                ctx.host.sqlite.query(":memory:", "WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<10000000) SELECT sum(x) FROM n;");
+                return { lines: [{ type: "text", label: "Quota", value: "old" }] };
+            }};
+        "#);
+        let started = Instant::now();
+        let output = run_probe_with_timeout(&slow, &temp_app_dir("native-timeout"), "0.0.0", Duration::from_millis(80));
+        assert_eq!(error_text(output), "probe timed out after 80ms");
+        assert!(started.elapsed() < Duration::from_secs(1), "native host command must respect the probe budget");
+        for value in ["91", "87"] {
+            let script = format!(r#"globalThis.__openusage_plugin = {{ probe(ctx) {{
+                const result = ctx.host.sqlite.query(":memory:", "SELECT {value} AS quota;");
+                return {{ lines: [{{ type: "text", label: "Quota", value: String(JSON.parse(result)[0].quota) }}] }};
+            }} }};"#);
+            let output = run_probe_with_timeout(&test_plugin(&script), &temp_app_dir("native-retry"), "0.0.0", Duration::from_secs(2));
+            assert!(matches!(output.lines.first(), Some(MetricLine::Text { value: actual, .. }) if actual == value));
+        }
     }
 
     #[test]

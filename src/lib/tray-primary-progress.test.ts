@@ -3,6 +3,17 @@ import { describe, expect, it } from "vitest"
 import { getTrayPrimaryBars } from "@/lib/tray-primary-progress"
 
 describe("getTrayPrimaryBars", () => {
+  it.each([[NaN, 100], [Infinity, 100], [5, Infinity], [5, NaN]])("does not turn invalid quota %s/%s into a real percentage", (used, limit) => {
+    const bars = getTrayPrimaryBars({
+      pluginsMeta: [{ id: "a", name: "A", iconUrl: "", primaryCandidates: ["Session"], lines: [] }],
+      pluginSettings: { order: ["a"], disabled: [] },
+      pluginStates: { a: { loading: false, error: null, data: {
+        providerId: "a", displayName: "A", lines: [{ type: "progress", label: "Session", used, limit, format: { kind: "percent" } }],
+      } } },
+    })
+    expect(bars[0]?.fraction).toBeUndefined()
+  })
+
   it("returns empty when settings missing", () => {
     const bars = getTrayPrimaryBars({
       pluginsMeta: [],
@@ -286,7 +297,7 @@ describe("getTrayPrimaryBars", () => {
     expect(bars).toEqual([{ id: "a", fraction: 0.2, label: "Credits" }])
   })
 
-  it("skips plugins with empty primaryCandidates", () => {
+  it("skips plugins with no declared primary or overview quota", () => {
     const bars = getTrayPrimaryBars({
       pluginsMeta: [
         {

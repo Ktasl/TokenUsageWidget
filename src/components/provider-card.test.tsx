@@ -33,7 +33,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 }))
 
 function formatMonthDay(date: Date): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("zh-TW", {
     month: "short",
     day: "numeric",
   }).format(date)
@@ -43,6 +43,46 @@ describe("ProviderCard", () => {
   beforeEach(() => {
     vi.useRealTimers()
     vi.mocked(openUrl).mockClear()
+  })
+
+  it("marks retained quota as old on refresh failure and shows its actual successful update time", () => {
+    render(<ProviderCard name="Codex" displayMode="left" dashboard error="更新逾時，請重新整理"
+      lastUpdatedAt={new Date("2026-10-23T11:23:20Z").getTime()}
+      lines={[{ type: "progress", label: "Session", used: 87, limit: 100, format: { kind: "percent" } }]}
+    />)
+    expect(screen.getByRole("status")).toHaveTextContent("資料可能已過期，顯示上次成功資料")
+    expect(screen.getByRole("status")).toHaveTextContent("上次成功更新：")
+    expect(screen.getByText("剩餘 13%")).toBeInTheDocument()
+    expect(screen.queryByText("正在取得 Token 用量…")).not.toBeInTheDocument()
+  })
+
+  it("describes a refresh of the provider without claiming the Token stage is running", () => {
+    render(<ProviderCard name="Codex" displayMode="left" dashboard loading
+      lastUpdatedAt={Date.now() - 17 * 60 * 60_000}
+      lines={[{ type: "progress", label: "Session", used: 87, limit: 100, format: { kind: "percent" } }]}
+    />)
+    expect(screen.getByText("正在更新用量…")).toBeInTheDocument()
+    expect(screen.getByRole("status")).toHaveTextContent("正在更新，顯示上次成功資料")
+  })
+
+  it("shows a Token timeout inside the dashboard Token section without hiding quota", () => {
+    render(<ProviderCard name="Claude" displayMode="left" dashboard scopeFilter="overview"
+      lines={[
+        { type: "progress", label: "Session", used: 0, limit: 100, format: { kind: "percent" } },
+        { type: "badge", label: "Token usage", text: "Token 統計逾時，額度仍可使用", color: "#f59e0b" },
+      ]}
+      skeletonLines={[
+        { type: "progress", label: "Session", scope: "overview" },
+        { type: "badge", label: "Token usage", scope: "overview" },
+      ]}
+    />)
+    const tokens = screen.getByLabelText("Claude Token 用量")
+    expect(within(tokens).getByText("Token 統計逾時，額度仍可使用")).toBeInTheDocument()
+    expect(screen.getAllByText("Token 統計逾時，額度仍可使用")).toHaveLength(1)
+    expect(screen.getByText("本次工作階段")).toBeInTheDocument()
+    expect(screen.getByText("剩餘 100%")).toBeInTheDocument()
+    expect(screen.queryByText("未提供 Token 用量")).not.toBeInTheDocument()
+    expect(screen.queryByText("無法取得用量")).not.toBeInTheDocument()
   })
 
   it("renders error state with retry", async () => {
@@ -56,7 +96,7 @@ describe("ProviderCard", () => {
       />
     )
     expect(screen.getByText("Nope")).toBeInTheDocument()
-    await userEvent.click(screen.getByRole("button", { name: "Retry" }))
+    await userEvent.click(screen.getByRole("button", { name: "重新整理" }))
     expect(onRetry).toHaveBeenCalledTimes(1)
   })
 
@@ -105,9 +145,9 @@ describe("ProviderCard", () => {
     )
     expect(screen.getByText("Label")).toBeInTheDocument()
     expect(screen.getByText("Pro")).toBeInTheDocument()
-    expect(screen.getByText("32%")).toBeInTheDocument()
-    expect(screen.getByText("$12.34")).toBeInTheDocument()
-    expect(screen.getByText("342 credits")).toBeInTheDocument()
+    expect(screen.getByText("已用 32%")).toBeInTheDocument()
+    expect(screen.getByText("已用 $12.34")).toBeInTheDocument()
+    expect(screen.getByText("已用 342 點數")).toBeInTheDocument()
   })
 
   it("renders quick links and opens URL", async () => {
@@ -157,7 +197,7 @@ describe("ProviderCard", () => {
         onRetry={() => {}}
       />
     )
-    expect(screen.getByText("Available in 1m 5s")).toBeInTheDocument()
+    expect(screen.getByText("1 分 5 秒後可重新整理")).toBeInTheDocument()
   })
 
   it("shows seconds-only cooldown", () => {
@@ -173,7 +213,7 @@ describe("ProviderCard", () => {
         onRetry={() => {}}
       />
     )
-    expect(screen.getByText("Available in 30s")).toBeInTheDocument()
+    expect(screen.getByText("30 秒後可重新整理")).toBeInTheDocument()
     vi.useRealTimers()
   })
 
@@ -198,7 +238,7 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getByText("58% left")).toBeInTheDocument()
+    expect(screen.getByText("剩餘 58%")).toBeInTheDocument()
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "58")
   })
 
@@ -249,7 +289,7 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getByText("Resets in 1h 5m")).toBeInTheDocument()
+    expect(screen.getByText("1 小時 5 分後重設")).toBeInTheDocument()
     expect(
       screen.getByText(
         formatResetTooltipText({
@@ -280,11 +320,11 @@ describe("ProviderCard", () => {
       />
     )
 
-    expect(screen.getByText("100% cap")).toBeInTheDocument()
+    expect(screen.getByText("上限 100%")).toBeInTheDocument()
     expect(screen.queryByText(/^Next reset:/)).not.toBeInTheDocument()
   })
 
-  it("shows 'Resets soon' when reset is under 5 minutes away", () => {
+  it("shows '即將重設' when reset is under 5 minutes away", () => {
     vi.useFakeTimers()
     const now = new Date("2026-02-02T00:00:00.000Z")
     vi.setSystemTime(now)
@@ -304,7 +344,7 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getByText("Resets soon")).toBeInTheDocument()
+    expect(screen.getByText("即將重設")).toBeInTheDocument()
     vi.useRealTimers()
   })
 
@@ -328,11 +368,11 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getByText("Resets in 5m")).toBeInTheDocument()
+    expect(screen.getByText("5 分後重設")).toBeInTheDocument()
     vi.useRealTimers()
   })
 
-  it("shows 'Resets soon' for stale reset timestamps in relative mode", () => {
+  it("shows '即將重設' for stale reset timestamps in relative mode", () => {
     vi.useFakeTimers()
     const now = new Date("2026-02-02T00:06:00.000Z")
     vi.setSystemTime(now)
@@ -352,11 +392,11 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getAllByText("Resets soon")).toHaveLength(2)
+    expect(screen.getAllByText("即將重設")).toHaveLength(2)
     vi.useRealTimers()
   })
 
-  it("shows 'Resets soon' for stale reset timestamps in absolute mode", () => {
+  it("shows '即將重設' for stale reset timestamps in absolute mode", () => {
     vi.useFakeTimers()
     const now = new Date("2026-02-02T00:06:00.000Z")
     vi.setSystemTime(now)
@@ -377,7 +417,7 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getAllByText("Resets soon")).toHaveLength(2)
+    expect(screen.getAllByText("即將重設")).toHaveLength(2)
     vi.useRealTimers()
   })
 
@@ -405,7 +445,7 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    const resetButton = screen.getByRole("button", { name: /^Resets today at / })
+    const resetButton = screen.getByRole("button", { name: /^今天 / })
     expect(resetButton).toBeInTheDocument()
     expect(
       screen.getByText(
@@ -443,7 +483,7 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getByText(/^Resets tomorrow at /)).toBeInTheDocument()
+    expect(screen.getByText(/^明天 /)).toBeInTheDocument()
     vi.useRealTimers()
   })
 
@@ -471,7 +511,7 @@ describe("ProviderCard", () => {
       />
     )
     expect(
-      screen.getByText((content) => content.startsWith(`Resets ${dateText} at `))
+      screen.getByText((content) => content.startsWith(`${dateText} `))
     ).toBeInTheDocument()
     vi.useRealTimers()
   })
@@ -500,7 +540,7 @@ describe("ProviderCard", () => {
       />
     )
     expect(
-      screen.getByText((content) => content.startsWith(`Resets ${dateText} at `))
+      screen.getByText((content) => content.startsWith(`${dateText} `))
     ).toBeInTheDocument()
     vi.useRealTimers()
   })
@@ -544,12 +584,12 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getByLabelText("Plenty of room")).toBeInTheDocument()
-    expect(screen.getByLabelText("Right on target")).toBeInTheDocument()
-    expect(screen.getByLabelText("Will run out")).toBeInTheDocument()
-    expect(screen.getByText("60% used at reset")).toBeInTheDocument()
-    expect(screen.getByText("90% used at reset")).toBeInTheDocument()
-    expect(screen.getByText("Limit in 8h 0m")).toBeInTheDocument()
+    expect(screen.getByLabelText("額度充裕")).toBeInTheDocument()
+    expect(screen.getByLabelText("用量符合預期")).toBeInTheDocument()
+    expect(screen.getByLabelText("可能提前用盡")).toBeInTheDocument()
+    expect(screen.getAllByText("近期增量不足，暫不預測耗盡時間")).toHaveLength(3)
+    expect(screen.queryByText(/預計.*重設時|後達上限/)).not.toBeInTheDocument()
+    expect(screen.getByText("週期平均：可能提前用盡")).toBeInTheDocument()
 
     // On-track hides the marker (like CodexBar); only ahead + behind show it
     const markers = document.querySelectorAll<HTMLElement>('[data-slot="progress-marker"]')
@@ -582,10 +622,10 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getByLabelText("Limit reached")).toBeInTheDocument()
-    expect(screen.getByText("Limit reached")).toBeInTheDocument()
-    expect(screen.queryByText(/in deficit/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/runs out in/i)).not.toBeInTheDocument()
+    expect(screen.getByLabelText("額度已用盡")).toBeInTheDocument()
+    expect(screen.getByText("額度已用盡")).toBeInTheDocument()
+    expect(screen.queryByText(/超出預期/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/預計 .*後用盡/i)).not.toBeInTheDocument()
     vi.useRealTimers()
   })
 
@@ -610,11 +650,12 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getByLabelText("Will run out")).toBeInTheDocument()
-    expect(screen.getByText(/^Runs out in /)).toBeInTheDocument()
-    expect(screen.queryByText("0% in deficit")).not.toBeInTheDocument()
-    expect(screen.queryByText("0% short")).not.toBeInTheDocument()
-    expect(screen.queryByText(/in deficit/i)).not.toBeInTheDocument()
+    expect(screen.getByLabelText("可能提前用盡")).toBeInTheDocument()
+    expect(screen.queryByText(/後用盡/)).not.toBeInTheDocument()
+    expect(screen.getByText("近期增量不足，暫不預測耗盡時間")).toBeInTheDocument()
+    expect(screen.queryByText("超出預期 0%")).not.toBeInTheDocument()
+    expect(screen.queryByText("不足 0%")).not.toBeInTheDocument()
+    expect(screen.queryByText(/超出預期/i)).not.toBeInTheDocument()
     vi.useRealTimers()
   })
 
@@ -639,8 +680,8 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getByText("Plenty of room")).toBeInTheDocument()
-    expect(screen.queryByText(/at reset/)).not.toBeInTheDocument()
+    expect(screen.getByText("週期平均：額度充裕")).toBeInTheDocument()
+    expect(screen.queryByText(/重設時/)).not.toBeInTheDocument()
     vi.useRealTimers()
   })
 
@@ -665,7 +706,7 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.queryByLabelText("Plenty of room")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("額度充裕")).not.toBeInTheDocument()
     expect(document.querySelector('[data-slot="progress-marker"]')).toBeNull()
     vi.useRealTimers()
   })
@@ -805,7 +846,7 @@ describe("ProviderCard", () => {
         ]}
       />
     )
-    expect(screen.getByText("Session")).toBeInTheDocument()
+    expect(screen.getByText("本次工作階段")).toBeInTheDocument()
     expect(screen.queryByText("Extra")).not.toBeInTheDocument()
   })
 
@@ -828,7 +869,7 @@ describe("ProviderCard", () => {
     )
     // Real data stays on screen — no skeleton swap
     expect(screen.getByText("Value")).toBeInTheDocument()
-    expect(screen.getByText("32%")).toBeInTheDocument()
+    expect(screen.getByText("已用 32%")).toBeInTheDocument()
     // Progress bar shows shimmer overlay
     expect(document.querySelector('[data-slot="progress-refreshing"]')).toBeTruthy()
   })
@@ -850,7 +891,7 @@ describe("ProviderCard", () => {
       />
     )
     // skeleton label for "Session" should not render because we have prior data (lastUpdatedAt set)
-    expect(screen.queryByText("Session")).toBeNull()
+    expect(screen.queryByText("本次工作階段")).toBeNull()
     // and the detail-scoped line stays filtered out
     expect(screen.queryByText("DetailOnly")).toBeNull()
   })
@@ -864,7 +905,7 @@ describe("ProviderCard", () => {
         skeletonLines={[{ type: "progress", label: "Session", scope: "overview" }]}
       />
     )
-    expect(screen.getByText("Session")).toBeInTheDocument()
+    expect(screen.getByText("本次工作階段")).toBeInTheDocument()
     expect(document.querySelector('[data-slot="progress-refreshing"]')).toBeNull()
   })
 
@@ -881,7 +922,7 @@ describe("ProviderCard", () => {
       />
     )
     // Stale data still visible
-    expect(screen.getByText("40%")).toBeInTheDocument()
+    expect(screen.getByText("已用 40%")).toBeInTheDocument()
     // Inline warning shown (not the full PluginError alert) — error text appears
     // in both the trigger and the tooltip content via our mocked Tooltip
     expect(screen.getAllByText("Couldn't update data. Try again?").length).toBeGreaterThan(0)
@@ -914,7 +955,7 @@ describe("ProviderCard", () => {
         lines={[{ type: "text", label: "Label", value: "Value" }]}
       />
     )
-    expect(screen.getByText(/Updated 2m ago/)).toBeInTheDocument()
+    expect(screen.getByText(/更新於 2 分鐘前/)).toBeInTheDocument()
     vi.useRealTimers()
   })
 
@@ -931,7 +972,7 @@ describe("ProviderCard", () => {
         lines={[{ type: "text", label: "Label", value: "Value" }]}
       />
     )
-    expect(screen.getByText(/Updated just now/)).toBeInTheDocument()
+    expect(screen.getByText(/更新於 剛剛/)).toBeInTheDocument()
     vi.useRealTimers()
   })
 
@@ -948,7 +989,7 @@ describe("ProviderCard", () => {
         lines={[{ type: "text", label: "Label", value: "Value" }]}
       />
     )
-    expect(screen.getByText(/Updated just now/)).toBeInTheDocument()
+    expect(screen.getByText(/更新於 剛剛/)).toBeInTheDocument()
     vi.useRealTimers()
   })
 
@@ -961,7 +1002,7 @@ describe("ProviderCard", () => {
         lines={[{ type: "text", label: "Label", value: "Value" }]}
       />
     )
-    expect(screen.queryByText(/Updated/)).toBeNull()
+    expect(screen.queryByText(/更新於/)).toBeNull()
   })
 })
 

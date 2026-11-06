@@ -52,6 +52,12 @@ ctx.host.log.warn("Token expires soon")
 ctx.host.log.error("API request failed: " + error.message)
 ```
 
+## Probe Stage Diagnostics
+
+`host.probe.stage(stage)` records a fixed acquisition stage: `credentials`, `quota`, `tokens`, or `complete`. Older hosts may omit this optional API. Arbitrary values are rejected without echoing the input.
+
+The host records a separate numeric probe ID and stage durations. Failed probes emit an Error-level summary, so diagnosis does not require logging credentials, URLs or response bodies. Marking a stage does not extend the overall probe deadline.
+
 ## Filesystem
 
 ```typescript
@@ -154,8 +160,13 @@ Reads an environment variable by name.
 - Returns variable value as string when set
 - Returns `null` when missing
 - Variable must be whitelisted first in `src-tauri/src/plugin_engine/host_api.rs`
-- Resolution order: current process env first, then a login+interactive shell lookup (macOS)
-- Values may be cached for the app session; restart OpenUsage after changing shell config
+- Resolution order: current process env first, then one login+interactive shell capture (macOS).
+- The first missing process variable triggers one capture of the whole allowlist, using `$SHELL` (zsh/bash/fish) or `/bin/zsh`. Concurrent queries share that capture; there is no per-variable or multi-shell scan.
+- Capture and waiting for another capture share at most 20 seconds, shortened by the probe's remaining deadline. This accommodates the measured 13.4-second cold login-shell startup; quota and optional statistics still use the remaining original 30-second probe budget.
+- A complete, strictly validated allowlist frame is enough to return. Capture does not wait for shell exit or inherited output pipes to close after all data has arrived. Its owned subprocess group is cleaned up on success as well as failure.
+- Unset variables remain valid missing values even when a shell profile enables `errexit`. Only exported variables are read; unexported shell variables do not select a different account.
+- Successful values and missing variables are cached together in memory for the app session; restart OpenUsage after changing shell config. Values are never persisted or logged.
+- Capture failure throws a fixed `ENV_LOOKUP_UNAVAILABLE` error rather than pretending settings are absent. A shared 30-second cooldown prevents repeated attempts for each variable; a later refresh can retry without restarting. Claude, Codex and MiniMax propagate this error before choosing another account, key or regional endpoint. Failure diagnostics use Error level so the default log retains only the fixed classification and elapsed milliseconds, never shell output or values.
 
 ### Example
 
@@ -530,10 +541,11 @@ host.ccusage.query(opts: {
   until?: string,                // End date (YYYYMMDD or YYYY-MM-DD)
   homePath?: string,             // Provider home override (CLAUDE_CONFIG_DIR or CODEX_HOME)
   claudePath?: string,           // Legacy Claude-only override (deprecated; use homePath)
+  timezone?: "Asia/Taipei" | "UTC", // Explicit source aggregation timezone
 }):
-  | { status: "ok", data: { daily: DailyUsage[] } }
+  | { status: "ok", data: { daily: DailyUsage[], sourceVersion: string }, sourceVersion: string, timezone?: string, sourceId: string }
   | { status: "no_runner" }
-  | { status: "runner_failed" }
+  | { status: "runner_failed", reason?: "timed_out" | "probe_budget_exhausted" }
 ```
 
 Queries local token usage via provider-focused ccusage commands:
@@ -545,7 +557,13 @@ Returns a status envelope:
 
 - `ok`: query succeeded, usage data is in `data.daily`
 - `no_runner`: no package runner (`bunx/pnpm/yarn/npm/npx`) was found
-- `runner_failed`: at least one runner was available but all attempts failed
+- `runner_failed`: execution failed or its optional time budget was exhausted. `reason` distinguishes `timed_out` and `probe_budget_exhausted` when available.
+
+All runner and legacy fallback attempts share one optional query budget of at most 8 seconds. The host reserves 2 seconds of the outer probe budget to return existing quota; it can skip statistics when that reserve cannot be kept. Runner discovery only checks executable files, and child-process/pipe waits remain bounded. A statistics failure must be presented separately from an already acquired quota.
+
+`sourceId` is a SHA-256 identity of the provider's local dataset location. It separates provider/directories without exposing private paths; it does not prove ownership by the currently logged-in account. `sourceVersion` identifies the CLI that actually returned the result, including a legacy fallback. Only a confirmed matching `timezone` permits weekly reports; adapters cannot relabel aggregates from another timezone. Invalid query options return an error rather than silently using a different source.
+
+Native keychain, SQLite, process and port inspection subprocesses also share the existing outer probe deadline. Their owned process groups and output pipes are bounded; timing out does not leave an unbounded subprocess blocking later queries. The outer probe remains 30 seconds, and optional Token statistics do not extend it. Diagnostics contain fixed phases and timing only, not command output or credentials.
 
 ### Behavior
 

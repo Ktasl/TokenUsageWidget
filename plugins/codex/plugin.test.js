@@ -52,6 +52,19 @@ describe("codex plugin", () => {
     expect(() => plugin.probe(ctx)).toThrow("Not logged in")
   })
 
+  it("does not use default auth when custom login environment could not be resolved", async () => {
+    const ctx = makeCtx()
+    ctx.host.env.get.mockImplementation(() => { throw new Error("ENV_LOOKUP_UNAVAILABLE") })
+    ctx.host.fs.exists = vi.fn(() => true)
+    ctx.host.fs.readText = vi.fn()
+    const plugin = await loadPlugin()
+    expect(() => plugin.probe(ctx)).toThrow("ENV_LOOKUP_UNAVAILABLE")
+    expect(ctx.host.fs.exists).not.toHaveBeenCalled()
+    expect(ctx.host.fs.readText).not.toHaveBeenCalled()
+    expect(ctx.host.keychain.readGenericPassword).not.toHaveBeenCalled()
+    expect(ctx.host.http.request).not.toHaveBeenCalled()
+  })
+
   it("loads auth from keychain when auth file is missing", async () => {
     const ctx = makeCtx()
     ctx.host.keychain.readGenericPassword.mockReturnValue(JSON.stringify({

@@ -8,6 +8,13 @@ const BARS_TRACK_OPACITY = 0.16
 const BARS_REMAINDER_OPACITY = 0.24
 const BARS_FILL_OPACITY = 1
 
+export type TrayProviderItem = {
+  id: string
+  fraction: number
+  percentText: string
+  iconUrl?: string
+}
+
 function rgbaToImageDataBytes(rgba: Uint8ClampedArray): Uint8Array {
   // Image.new expects Uint8Array. Uint8ClampedArray shares the same buffer layout.
   return new Uint8Array(rgba.buffer)
@@ -374,14 +381,66 @@ async function rasterizeSvgToRgba(svg: string, widthPx: number, heightPx: number
   }
 }
 
+async function renderTrayProviderItems(items: TrayProviderItem[], sizePx: number): Promise<Image> {
+  const gap = Math.max(4, Math.round(sizePx * 0.25))
+  const layouts = items.map((item) => getSvgLayout({ sizePx, style: "provider", percentText: item.percentText }))
+  const width = layouts.reduce((sum, layout) => sum + layout.width, 0) + gap * (items.length - 1)
+  const canvas = document.createElement("canvas")
+  canvas.width = width
+  canvas.height = sizePx
+  const ctx = canvas.getContext("2d")
+  if (!ctx) throw new Error("Canvas 2D context missing")
+  ctx.clearRect(0, 0, width, sizePx)
+  ctx.fillStyle = "black"
+  ctx.strokeStyle = "black"
+  ctx.textBaseline = "middle"
+  let offset = 0
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]
+    const layout = layouts[index]
+    const iconSize = Math.max(6, Math.round(sizePx - layout.pad) - PROVIDER_ICON_SHRINK_PX)
+    const iconX = offset + layout.barsX
+    const iconY = Math.round((sizePx - iconSize) / 2) + PROVIDER_ICON_VERTICAL_NUDGE_PX
+    const iconUrl = item.iconUrl?.trim()
+    if (iconUrl) {
+      // Load provider SVGs directly: SVG-as-image with nested <image> loses
+      // provider icons at 1x in macOS 13 WebKit.
+      const img = new window.Image()
+      img.decoding = "async"
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve()
+        img.onerror = () => reject(new Error(`Failed to load tray icon for ${item.id}`))
+        img.src = iconUrl
+      })
+      ctx.drawImage(img, iconX, iconY, iconSize, iconSize)
+    } else {
+      ctx.beginPath()
+      ctx.lineWidth = Math.max(1.5, Math.round(iconSize * 0.14))
+      ctx.arc(iconX + iconSize / 2, iconY + iconSize / 2, Math.max(2, iconSize / 2 - 1.5), 0, 2 * Math.PI)
+      ctx.stroke()
+    }
+    ctx.font = `700 ${layout.fontSize}px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif`
+    ctx.fillText(item.percentText, offset + layout.textX, layout.textY)
+    offset += layout.width + gap
+  }
+
+  const rgba = rgbaToImageDataBytes(ctx.getImageData(0, 0, width, sizePx).data)
+  return await Image.new(rgba, width, sizePx)
+}
+
 export async function renderTrayBarsIcon(args: {
   bars: TrayPrimaryBar[]
   sizePx: number
   style?: MenubarIconStyle
   percentText?: string
   providerIconUrl?: string
+  providerItems?: TrayProviderItem[]
 }): Promise<Image> {
   const { bars, sizePx, style = "provider", percentText, providerIconUrl } = args
+  if (style === "provider" && args.providerItems && args.providerItems.length > 1) {
+    return renderTrayProviderItems(args.providerItems, sizePx)
+  }
   const text = normalizePercentText(percentText)
   const svg = makeTrayBarsSvg({
     bars,

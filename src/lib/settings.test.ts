@@ -324,6 +324,22 @@ describe("settings", () => {
     await expect(loadMenubarIconStyle()).resolves.toBe("bars")
   })
 
+  it("stores dual quota without rewriting a user's existing legacy style", async () => {
+    for (const style of ["provider", "bars", "donut"] as const) {
+      storeState.set("menubarIconStyle", style)
+      await expect(loadMenubarIconStyle()).resolves.toBe(style)
+    }
+    await saveMenubarIconStyle("quota")
+    await expect(loadMenubarIconStyle()).resolves.toBe("quota")
+  })
+
+  it("roundtrips compact while preserving a saved detailed quota theme", async () => {
+    storeState.set("menubarIconStyle", "quota")
+    await expect(loadMenubarIconStyle()).resolves.toBe("quota")
+    await saveMenubarIconStyle("compact")
+    await expect(loadMenubarIconStyle()).resolves.toBe("compact")
+  })
+
   it("loads stored menubar donut icon style", async () => {
     storeState.set("menubarIconStyle", "donut")
     await expect(loadMenubarIconStyle()).resolves.toBe("donut")

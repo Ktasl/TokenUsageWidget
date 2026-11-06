@@ -26,20 +26,25 @@ pub struct ResolvedProxy {
 /// Global resolved proxy: Some(active) or None(disabled).
 static RESOLVED_PROXY: OnceLock<Option<ResolvedProxy>> = OnceLock::new();
 
+/// Select the edition-specific proxy config before starting any requests.
+pub fn initialize(config_directory: &str) {
+    RESOLVED_PROXY.get_or_init(|| load_and_resolve_proxy(config_directory));
+}
+
 /// Returns the resolved proxy, or None if disabled/invalid/missing.
 /// Loaded once from disk on first call; subsequent calls are zero-cost.
 pub fn get_resolved_proxy() -> Option<&'static ResolvedProxy> {
-    RESOLVED_PROXY.get_or_init(|| load_and_resolve_proxy()).as_ref()
+    RESOLVED_PROXY.get_or_init(|| load_and_resolve_proxy(".openusage")).as_ref()
 }
 
-/// Config file path: ~/.openusage/config.json
-fn config_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".openusage").join("config.json"))
+/// Proxy config path, isolated by edition-specific directory.
+fn config_path(config_directory: &str) -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(config_directory).join("config.json"))
 }
 
 /// Loads config from disk, resolves proxy, logs result.
-fn load_and_resolve_proxy() -> Option<ResolvedProxy> {
-    let Some(path) = config_path() else {
+fn load_and_resolve_proxy(config_directory: &str) -> Option<ResolvedProxy> {
+    let Some(path) = config_path(config_directory) else {
         log::debug!("[config] no home directory, proxy disabled");
         return None;
     };
@@ -98,6 +103,14 @@ pub fn redact_proxy_url(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_edition_proxy_config_is_separate() {
+        let original = config_path(".openusage").expect("home directory");
+        let test = config_path(".tokenusagewidget-test").expect("home directory");
+        assert_ne!(test, original);
+        assert!(test.ends_with(".tokenusagewidget-test/config.json"));
+    }
 
     #[test]
     fn redact_proxy_url_with_credentials() {

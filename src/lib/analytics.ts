@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core"
+import { IS_TEST_BUILD } from "@/lib/app-edition"
 
 /**
  * Thin wrapper around Aptabase's trackEvent.
@@ -10,6 +11,7 @@ export function track(
   event: string,
   props?: Record<string, string | number>,
 ) {
+  if (IS_TEST_BUILD) return
   const tauriRuntime = isTauri()
 
   if (!tauriRuntime) {

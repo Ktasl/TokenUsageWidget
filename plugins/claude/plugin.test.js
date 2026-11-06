@@ -23,6 +23,15 @@ beforeEach(() => {
 const loadPlugin = async () => plugin
 
 describe("claude plugin", () => {
+  it("does not silently select a different account when login environment is unavailable", async () => {
+    const ctx = makeCtx()
+    ctx.host.env.get = () => { throw new Error("登入環境初始化失敗（ENV_LOOKUP_UNAVAILABLE），請稍後重新整理") }
+    expect(() => plugin.probe(ctx)).toThrow("ENV_LOOKUP_UNAVAILABLE")
+    expect(ctx.host.keychain.readGenericPasswordForCurrentUser).not.toHaveBeenCalled()
+    expect(ctx.host.keychain.readGenericPassword).not.toHaveBeenCalled()
+    expect(ctx.host.http.request).not.toHaveBeenCalled()
+  })
+
   it("throws when no credentials", async () => {
     const ctx = makeCtx()
     const plugin = await loadPlugin()
@@ -636,7 +645,7 @@ describe("claude plugin", () => {
     expect(result.lines.find((l) => l.label === "Claude Design")).toBeUndefined()
   })
 
-  it("omits extra usage line when used credits are zero and no limit exists", async () => {
+  it("preserves provider-reported zero extra usage when no limit exists", async () => {
     const ctx = makeCtx()
     ctx.host.fs.readText = () =>
       JSON.stringify({ claudeAiOauth: { accessToken: "token", subscriptionType: "pro" } })
@@ -650,7 +659,7 @@ describe("claude plugin", () => {
     })
     const plugin = await loadPlugin()
     const result = plugin.probe(ctx)
-    expect(result.lines.find((line) => line.label === "Extra usage spent")).toBeUndefined()
+    expect(result.lines.find((line) => line.label === "Extra usage spent")).toMatchObject({ type: "text", value: "$0" })
   })
 
   it("uses keychain credentials when value is hex-encoded JSON", async () => {

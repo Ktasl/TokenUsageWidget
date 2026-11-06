@@ -32,6 +32,7 @@
       const trimmed = value.trim()
       return trimmed || null
     } catch (e) {
+      if (String(e).includes("ENV_LOOKUP_UNAVAILABLE")) throw e
       ctx.host.log.warn("CODEX_HOME read failed: " + String(e))
       return null
     }
@@ -367,6 +368,59 @@
   var PERIOD_SESSION_MS = 5 * 60 * 60 * 1000    // 5 hours
   var PERIOD_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
+  // Daily reports are local-directory observations, not evidence of account ownership.
+  function tokenUsageReport(result) {
+    const report = { status: "unavailable", timezone: "Asia/Taipei", source: "local-logs", accountScope: "local-directory", days: [] }
+    for (const key of ["sourceId", "sourceVersion"]) {
+      if (result && typeof result[key] === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(result[key])) report[key] = result[key]
+    }
+    const fail = (status, reason) => Object.assign(report, { status: status, reason: reason, days: [] })
+    if (!result || result.status !== "ok") {
+      const reason = result && ["timed_out", "probe_budget_exhausted", "no_runner"].indexOf(result.reason || result.status) >= 0 ? (result.reason || result.status) : "runner_failed"
+      return fail("unavailable", reason)
+    }
+    if (result.timezone !== "Asia/Taipei") return fail("unavailable", "timezone_unconfirmed")
+    if (result.flavor === "legacy" || result.sourceVersion === "18.0.11") return fail("unavailable", "legacy_duplicate_risk")
+    if (!result.data || !Array.isArray(result.data.daily) || result.data.daily.length > 4000) return fail("invalid", "invalid_daily")
+    const count = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    const dateKey = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value + "T00:00:00Z")) && new Date(value + "T00:00:00Z").toISOString().slice(0, 10) === value
+    const days = Object.create(null)
+    for (const raw of result.data.daily) {
+      if (!raw || !dateKey(raw.date) || !count(raw.totalTokens)) return fail("invalid", "invalid_daily")
+      const day = { date: raw.date, totalTokens: raw.totalTokens }
+      const fields = { inputTokens: "inputTokens", outputTokens: "outputTokens", cachedTokens: "cachedInputTokens" }
+      for (const target of Object.keys(fields)) {
+        const value = raw[fields[target]]
+        if (value !== undefined) {
+          if (!count(value)) return fail("invalid", "invalid_daily")
+          day[target] = value
+        }
+      }
+      // Only explicit model totals are admitted: output/reasoning/cache fields overlap.
+      const entries = raw.models && typeof raw.models === "object" && !Array.isArray(raw.models)
+        ? Object.keys(raw.models).map((name) => ({ name: name, value: raw.models[name] }))
+        : Array.isArray(raw.modelBreakdowns) ? raw.modelBreakdowns.map((value) => ({ name: value && value.modelName, value: value })) : []
+      const models = Object.create(null)
+      for (const entry of entries) {
+        if (!entry.value || entry.value.totalTokens === undefined) continue
+        if (typeof entry.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:+-]{0,119}$/.test(entry.name) || !count(entry.value.totalTokens)) return fail("invalid", "invalid_models")
+        if (models[entry.name] !== undefined && models[entry.name] !== entry.value.totalTokens) return fail("invalid", "conflicting_models")
+        models[entry.name] = entry.value.totalTokens
+      }
+      const names = Object.keys(models).sort()
+      if (names.length) {
+        let modelTotal = 0
+        day.models = names.map((name) => { modelTotal += models[name]; return { name: name, totalTokens: models[name] } })
+        if (!count(modelTotal) || modelTotal > day.totalTokens) return fail("invalid", "invalid_models")
+      }
+      if (days[day.date] && JSON.stringify(days[day.date]) !== JSON.stringify(day)) return fail("invalid", "conflicting_daily")
+      days[day.date] = day
+    }
+    report.status = "ok"
+    report.days = Object.keys(days).sort().map((date) => days[date])
+    return report
+  }
+
   function queryTokenUsage(ctx) {
     if (!ctx.host.ccusage || typeof ctx.host.ccusage.query !== "function") {
       return { status: "no_runner", data: null }
@@ -379,7 +433,7 @@
     const m = since.getMonth() + 1
     const d = since.getDate()
     const sinceStr = "" + y + (m < 10 ? "0" : "") + m + (d < 10 ? "0" : "") + d
-    const queryOpts = { provider: "codex", since: sinceStr }
+    const queryOpts = { provider: "codex", since: sinceStr, timezone: "Asia/Taipei" }
     const codexHome = readCodexHome(ctx)
     if (codexHome) {
       queryOpts.homePath = codexHome
@@ -390,12 +444,12 @@
       return { status: "runner_failed", data: null }
     }
     if (result.status !== "ok") {
-      return { status: result.status, data: null }
+      return { status: result.status, reason: result.reason, data: null }
     }
     if (!result.data || !Array.isArray(result.data.daily)) {
       return { status: "runner_failed", data: null }
     }
-    return { status: "ok", data: result.data }
+    return { status: "ok", data: result.data, timezone: result.timezone, sourceId: result.sourceId, sourceVersion: result.sourceVersion, flavor: result.flavor }
   }
 
   function fmtTokens(n) {
@@ -465,6 +519,38 @@
     }
 
     return null
+  }
+
+  // ccusage is local log/API-price accounting, never a subscription invoice.
+  function pushLocalEstimatedCost(lines, ctx, result, report) {
+    if (report.status !== "ok" || !report.days.length || !result.data || !Array.isArray(result.data.daily)) return
+    const today = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const acceptedDays = report.days.filter((day) => day.date <= today)
+    if (!acceptedDays.length) return
+    const accepted = new Set(acceptedDays.map((day) => day.date))
+    const costs = new Map()
+    for (const day of result.data.daily) {
+      if (!day || !accepted.has(day.date)) continue
+      const values = [day.totalCost, day.costUSD].filter((value) => value !== undefined && value !== null)
+      let nanos = null
+      if (values.length && values.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0)) {
+        const rounded = values.map((value) => Math.round(value * 1e9))
+        if (!rounded.every(Number.isSafeInteger) || rounded.some((value) => value !== rounded[0])) return
+        nanos = rounded[0]
+      }
+      // Duplicate observations cannot inflate cost or silently disagree on coverage.
+      if (costs.has(day.date) && costs.get(day.date) !== nanos) return
+      costs.set(day.date, nanos)
+    }
+    const known = Array.from(costs.values()).filter((value) => value !== null)
+    if (!known.length) return
+    const total = known.reduce((sum, value) => sum + value, 0)
+    if (!Number.isSafeInteger(total)) return
+    lines.push(ctx.line.text({
+      label: "Local estimated cost",
+      value: "$" + (total / 1e9).toFixed(2),
+      subtitle: acceptedDays[0].date + " ～ " + acceptedDays[acceptedDays.length - 1].date + "；有金額紀錄 " + known.length + "/" + acceptedDays.length + " 天",
+    }))
   }
 
   function costAndTokensLabel(data, opts) {
@@ -593,7 +679,7 @@
     lines.push(ctx.line.barChart({
       label: "Usage Trend",
       points: points,
-      note: "Estimated from local Codex logs for the selected account.",
+      note: "Estimated from local Codex logs; account ownership is unverified.",
       color: "#74AA9C",
     }))
   }
@@ -858,8 +944,14 @@
         }
       }
 
-      const tokenUsageResult = queryTokenUsage(ctx)
-      if (tokenUsageResult.status === "ok") {
+      let tokenUsageResult
+      try { tokenUsageResult = queryTokenUsage(ctx) }
+      catch (_) {
+        // Optional statistics must never discard quota already fetched successfully.
+        tokenUsageResult = { status: "runner_failed", data: null }
+        ctx.host.log.error("stage=tokens outcome=runner_failed")
+      }
+      if (tokenUsageResult.status === "ok" && tokenUsageResult.data.daily.every((day) => day && typeof day === "object")) {
         const tokenUsage = tokenUsageResult.data
         const now = new Date()
         const todayKey = dayKeyFromDate(now)
@@ -915,7 +1007,9 @@
         lines.push(ctx.line.badge({ label: "Status", text: "No usage data", color: "#a3a3a3" }))
       }
 
-      return { plan: plan, lines: lines }
+      const report = tokenUsageReport(tokenUsageResult)
+      pushLocalEstimatedCost(lines, ctx, tokenUsageResult, report)
+      return { plan: plan, lines: lines, tokenUsageReport: report }
     }
 
     if (auth.OPENAI_API_KEY) {

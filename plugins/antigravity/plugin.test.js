@@ -385,7 +385,7 @@ describe("antigravity plugin", () => {
     expect(result.lines.length).toBeGreaterThan(0)
   })
 
-  it("treats models with no quotaInfo as depleted (100% used)", async () => {
+  it("marks models with no quotaInfo as unknown", async () => {
     const ctx = makeCtx()
     const discovery = makeDiscovery()
     const response = makeUserStatusResponse({
@@ -400,13 +400,14 @@ describe("antigravity plugin", () => {
     const result = plugin.probe(ctx)
     const claude = result.lines.find((l) => l.label === "Claude")
     expect(claude).toBeTruthy()
-    expect(claude.used).toBe(100)
-    expect(claude.limit).toBe(100)
+    expect(claude).toMatchObject({ type: "text", value: "未提供有效額度" })
+    expect(claude.used).toBeUndefined()
+    expect(claude.limit).toBeUndefined()
     expect(claude.resetsAt).toBeUndefined()
     expect(result.lines.find((l) => l.label === "Gemini Pro")).toBeTruthy()
   })
 
-  it("dedup picks depleted variant (no quotaInfo) over non-depleted sibling", async () => {
+  it("dedup keeps a valid fraction instead of replacing it with an unknown sibling", async () => {
     const ctx = makeCtx()
     const discovery = makeDiscovery()
     const response = makeUserStatusResponse({
@@ -421,11 +422,11 @@ describe("antigravity plugin", () => {
     const result = plugin.probe(ctx)
     const pro = result.lines.find((l) => l.label === "Gemini Pro")
     expect(pro).toBeTruthy()
-    expect(pro.used).toBe(100)
-    expect(pro.resetsAt).toBeUndefined()
+    expect(pro.used).toBe(25)
+    expect(pro.resetsAt).toBe("2026-02-08T09:10:56Z")
   })
 
-  it("returns lines when all models are depleted (no quotaInfo)", async () => {
+  it("returns explicit unknown text when every model has no quotaInfo", async () => {
     const ctx = makeCtx()
     const discovery = makeDiscovery()
     const response = makeUserStatusResponse({
@@ -441,7 +442,7 @@ describe("antigravity plugin", () => {
     expect(result).toBeTruthy()
     const labels = result.lines.map((l) => l.label)
     expect(labels).toEqual(["Gemini Pro", "Claude"])
-    expect(result.lines.every((l) => l.used === 100)).toBe(true)
+    expect(result.lines.every((l) => l.type === "text" && l.value === "未提供有效額度" && l.used === undefined)).toBe(true)
   })
 
   it("skips configs with missing or empty labels", async () => {
@@ -474,7 +475,7 @@ describe("antigravity plugin", () => {
     expect(pro.resetsAt).toBe("2026-02-08T09:10:56Z")
   })
 
-  it("clamps remainingFraction outside 0-1 range", async () => {
+  it("rejects remainingFraction outside 0-1 range as unknown", async () => {
     const ctx = makeCtx()
     const discovery = makeDiscovery()
     const response = makeUserStatusResponse({
@@ -489,8 +490,10 @@ describe("antigravity plugin", () => {
     const result = plugin.probe(ctx)
     const over = result.lines.find((l) => l.label === "Gemini Pro")
     const neg = result.lines.find((l) => l.label === "Gemini Flash")
-    expect(over.used).toBe(0) // clamped to 1.0 → 0% used
-    expect(neg.used).toBe(100) // clamped to 0.0 → 100% used
+    expect(over).toMatchObject({ type: "text", value: "未提供有效額度" })
+    expect(neg).toMatchObject({ type: "text", value: "未提供有效額度" })
+    expect(over.used).toBeUndefined()
+    expect(neg.used).toBeUndefined()
   })
 
   it("handles missing resetTime gracefully", async () => {
@@ -848,7 +851,7 @@ describe("antigravity plugin", () => {
     expect(ccCalls.length).toBe(0)
   })
 
-  it("Cloud Code treats models without quotaInfo as depleted (100% used)", async () => {
+  it("Cloud Code marks models without quotaInfo as unknown", async () => {
     const ctx = makeCtx()
     const futureExpiry = Math.floor(Date.now() / 1000) + 3600
     setupSqliteMock(ctx, makeOAuthSentinelB64(ctx, { accessToken: "ya29.test-token", refreshToken: "1//refresh", expirySeconds: futureExpiry }))
@@ -879,8 +882,9 @@ describe("antigravity plugin", () => {
 
     const noQuota = result.lines.find((l) => l.label === "Gemini Flash")
     expect(noQuota).toBeTruthy()
-    expect(noQuota.used).toBe(100)
-    expect(noQuota.limit).toBe(100)
+    expect(noQuota).toMatchObject({ type: "text", value: "未提供有效額度" })
+    expect(noQuota.used).toBeUndefined()
+    expect(noQuota.limit).toBeUndefined()
     expect(noQuota.resetsAt).toBeUndefined()
     expect(result.lines.find((l) => l.label === "Gemini Pro")).toBeTruthy()
   })

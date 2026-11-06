@@ -15,11 +15,22 @@ import type { ManifestLine, MetricLine, PluginLink } from "@/lib/plugin-types"
 import { groupLinesByType } from "@/lib/group-lines-by-type"
 import { clamp01, formatCountNumber, formatFixedPrecisionNumber } from "@/lib/utils"
 import { calculateDeficit, calculatePaceStatus, type PaceStatus } from "@/lib/pace-status"
-import { buildPaceDetailText, formatDeficitText, formatRunsOutText, getPaceStatusText } from "@/lib/pace-tooltip"
+import { formatDeficitText, getPaceStatusText } from "@/lib/pace-tooltip"
+import { isMoneyLine, tokenUsageText } from "@/lib/token-usage"
+import { countUnit, formatRelativeTime, metricLabel } from "@/lib/locale"
 import { formatResetAbsoluteLabel, formatResetRelativeLabel, formatResetTooltipText } from "@/lib/reset-tooltip"
+import { SupplementaryUsagePanel, isSupplementaryUsageLine } from "@/components/supplementary-usage-panel"
+import { TokenReportPanel } from "@/components/token-report-panel"
+import type { TokenUsageReport } from "@/lib/token-report"
+import { quotaMetricKey, useRecentQuotaPace } from "@/hooks/use-recent-quota-pace"
+import type { RecentQuotaForecast } from "@/lib/recent-quota-pace"
 
 interface ProviderCardProps {
+  providerId?: string
   name: string
+  iconUrl?: string
+  brandColor?: string
+  dashboard?: boolean
   plan?: string
   links?: PluginLink[]
   showSeparator?: boolean
@@ -29,6 +40,7 @@ interface ProviderCardProps {
   skeletonLines?: ManifestLine[]
   lastManualRefreshAt?: number | null
   lastUpdatedAt?: number | null
+  tokenUsageReport?: TokenUsageReport
   onRetry?: () => void
   scopeFilter?: "overview" | "all"
   displayMode: DisplayMode
@@ -64,16 +76,16 @@ function PaceIndicator({
           <span
             {...props}
             className={`inline-block w-2 h-2 rounded-full ${colorClass}`}
-            aria-label={isLimitReached ? "Limit reached" : statusText}
+            aria-label={isLimitReached ? "額度已用盡" : statusText}
           />
         )}
       />
       <TooltipContent side="top" className="text-xs text-center">
         {isLimitReached ? (
-          "Limit reached"
+          "額度已用盡"
         ) : (
           <>
-            <div>{statusText}</div>
+            <div>週期平均：{statusText}</div>
             {detailText && <div className="text-[10px] opacity-60">{detailText}</div>}
           </>
         )}
@@ -82,19 +94,12 @@ function PaceIndicator({
   )
 }
 
-function formatRelativeTime(diffMs: number): string {
-  const seconds = Math.floor(Math.max(0, diffMs) / 1000)
-  if (seconds < 60) return "just now"
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
-
 export function ProviderCard({
+  providerId,
   name,
+  iconUrl,
+  brandColor,
+  dashboard = false,
   plan,
   links = [],
   showSeparator = true,
@@ -104,6 +109,7 @@ export function ProviderCard({
   skeletonLines = [],
   lastManualRefreshAt,
   lastUpdatedAt,
+  tokenUsageReport,
   onRetry,
   scopeFilter = "all",
   displayMode,
@@ -126,9 +132,21 @@ export function ProviderCard({
   const filteredSkeletonLines = scopeFilter === "all"
     ? skeletonLines
     : skeletonLines.filter(line => line.scope === "overview")
-  const filteredLines = scopeFilter === "all"
+  const showSupplementary = dashboard || Boolean(tokenUsageReport) || providerId === "claude" || providerId === "codex"
+  const tokenIssue = lines.find((line) => line.type === "badge" && line.label === "Token usage")
+  const tokenLines = dashboard ? lines.flatMap((line) => {
+    const value = tokenUsageText(line)
+    return value ? [{ label: line.label, value }] : []
+  }) : []
+  const filteredLines = (scopeFilter === "all"
     ? lines
-    : lines.filter(line => overviewLabels.has(line.label))
+    : lines.filter(line => line.type === "progress"
+      ? Number.isFinite(line.used) && Number.isFinite(line.limit) && line.limit > 0
+      : overviewLabels.has(line.label)))
+    .filter(line => !showSupplementary || !isSupplementaryUsageLine(line))
+    .filter(line => !tokenUsageReport || line.type === "progress" || line.type === "badge" || (line.type === "text" && line.label === "Note"))
+    .filter(line => !tokenUsageReport || (!tokenUsageText(line) && !(line.type === "badge" && line.label === "Token usage")))
+    .filter(line => !dashboard || (!isMoneyLine(line) && line !== tokenIssue && !(line.type === "text" && tokenUsageText(line))))
 
   const hasResetCountdown = filteredLines.some(
     (line) => line.type === "progress" && Boolean(line.resetsAt)
@@ -136,7 +154,7 @@ export function ProviderCard({
 
   // "has ever loaded" — true if either we have a prior success timestamp,
   // or the parent is passing lines directly (tests + legacy state paths).
-  const hasStaleData = lastUpdatedAt != null || filteredLines.length > 0
+  const hasStaleData = lastUpdatedAt != null || filteredLines.length > 0 || tokenLines.length > 0
   const isRefreshingWithData = loading && hasStaleData
 
   const tickerIntervalMs = cooldownRemainingMs > 0 ? 1000 : 30_000
@@ -146,8 +164,10 @@ export function ProviderCard({
     intervalMs: tickerIntervalMs,
     stopAfterMs: cooldownRemainingMs > 0 && !hasResetCountdown ? cooldownRemainingMs : null,
   })
+  const recentForecasts = useRecentQuotaPace({ providerId, sourceId: tokenUsageReport?.sourceId, lines, observedAt: lastUpdatedAt, now: Math.max(now, Date.now()),
+    stale: Boolean(error) || (lastUpdatedAt != null && now - lastUpdatedAt > 10 * 60_000), displayMode })
 
-  const inCooldown = lastManualRefreshAt
+  const inCooldown = !error && lastManualRefreshAt
     ? now - lastManualRefreshAt < REFRESH_COOLDOWN_MS
     : false
 
@@ -176,17 +196,18 @@ export function ProviderCard({
     const minutes = Math.floor(totalSeconds / 60)
     const seconds = totalSeconds % 60
     if (minutes > 0) {
-      return `Available in ${minutes}m ${seconds}s`
+      return `${minutes} 分 ${seconds} 秒後可重新整理`
     }
-    return `Available in ${seconds}s`
+    return `${seconds} 秒後可重新整理`
   }
 
   return (
-    <div>
-      <div className="py-3">
+    <section aria-label={`${name} 額度`} className={dashboard ? "min-w-0 rounded-2xl border border-border/70 bg-card p-4 shadow-sm" : undefined}>
+      <div className={dashboard ? undefined : "py-3"}>
         <div className="flex items-center justify-between mb-2">
-          <div className="relative flex items-center">
-            <h2 className="text-lg font-semibold" style={{ transform: "translateZ(0)" }}>{name}</h2>
+          <div className="relative flex min-w-0 items-center gap-1">
+            {iconUrl && <span aria-hidden="true" className="mr-1 size-7 shrink-0" style={{ backgroundColor: brandColor ?? "currentColor", maskImage: `url("${iconUrl}")`, WebkitMaskImage: `url("${iconUrl}")`, maskSize: "contain", WebkitMaskSize: "contain", maskRepeat: "no-repeat", WebkitMaskRepeat: "no-repeat", maskPosition: "center", WebkitMaskPosition: "center" }} />}
+            <h2 className="min-w-0 truncate text-base font-semibold" style={{ transform: "translateZ(0)" }}>{name}</h2>
             {onRetry && (
               loading ? (
                 <Button
@@ -229,7 +250,7 @@ export function ProviderCard({
                         {...props}
                         variant="ghost"
                         size="icon-xs"
-                        aria-label="Retry"
+                        aria-label="重新整理"
                         onClick={(e) => {
                           e.currentTarget.blur()
                           onRetry()
@@ -243,7 +264,7 @@ export function ProviderCard({
                   />
                   {lastUpdatedAt != null && (
                     <TooltipContent side="top">
-                      Updated {formatRelativeTime(Date.now() - lastUpdatedAt)}
+                      更新於 {formatRelativeTime(Date.now() - lastUpdatedAt)}
                     </TooltipContent>
                   )}
                 </Tooltip>
@@ -278,6 +299,32 @@ export function ProviderCard({
             ))}
           </div>
         )}
+        {tokenUsageReport && <TokenReportPanel report={tokenUsageReport} now={now} stale={Boolean(error) || (lastUpdatedAt != null && now - lastUpdatedAt > 10 * 60_000)} />}
+        {dashboard && !tokenUsageReport && (
+          <div className="mb-4 rounded-xl bg-muted/40 p-3" aria-label={`${name} Token 用量`}>
+            <h3 className="mb-2 text-xs font-medium text-muted-foreground">Token 用量</h3>
+            {tokenLines.length > 0 ? (
+              <dl className="space-y-2">
+                {tokenLines.map((line, index) => (
+                  <div key={`${line.label}-${index}`} className="flex items-baseline justify-between gap-3">
+                    <dt className="min-w-0 text-xs text-muted-foreground">{metricLabel(line.label)}</dt>
+                    <dd className="shrink-0 text-base font-semibold tabular-nums">{line.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : <p className="text-sm text-muted-foreground">{loading ? "正在更新用量…" : tokenIssue?.type === "badge" ? tokenIssue.text : "未提供 Token 用量"}</p>}
+          </div>
+        )}
+
+        {showSupplementary && <SupplementaryUsagePanel lines={lines} hasTokenReport={Boolean(tokenUsageReport)} stale={Boolean(error) || (lastUpdatedAt != null && now - lastUpdatedAt > 10 * 60_000)} />}
+
+        {hasStaleData && (loading || error) && (
+          <p role="status" className="mb-2 text-xs text-muted-foreground">
+            {error ? "資料可能已過期，顯示上次成功資料" : "正在更新，顯示上次成功資料"}
+            {lastUpdatedAt != null && <span className="block">上次成功更新：{new Date(lastUpdatedAt).toLocaleString("zh-TW")}</span>}
+          </p>
+        )}
+
         {error && !hasStaleData && <PluginError message={error} />}
 
         {error && hasStaleData && (
@@ -300,8 +347,10 @@ export function ProviderCard({
         )}
 
         {loading && !hasStaleData && !error && (
-          <SkeletonLines lines={filteredSkeletonLines} />
+          <SkeletonLines lines={filteredSkeletonLines.map(line => ({ ...line, label: metricLabel(line.label) }))} />
         )}
+
+        {!loading && !error && filteredLines.length === 0 && <p className="py-3 text-sm text-muted-foreground">尚無額度資料</p>}
 
         {hasStaleData && (
           <div className="space-y-4">
@@ -318,6 +367,8 @@ export function ProviderCard({
                       onResetTimerDisplayModeToggle={onResetTimerDisplayModeToggle}
                       now={now}
                       refreshing={isRefreshingWithData}
+                      stale={Boolean(error) || (lastUpdatedAt != null && now - lastUpdatedAt > 10 * 60_000)}
+                      recentForecast={line.type === "progress" ? recentForecasts.get(quotaMetricKey(line)) : null}
                     />
                   ))}
                 </div>
@@ -333,6 +384,8 @@ export function ProviderCard({
                       onResetTimerDisplayModeToggle={onResetTimerDisplayModeToggle}
                       now={now}
                       refreshing={isRefreshingWithData}
+                      stale={Boolean(error) || (lastUpdatedAt != null && now - lastUpdatedAt > 10 * 60_000)}
+                      recentForecast={line.type === "progress" ? recentForecasts.get(quotaMetricKey(line)) : null}
                     />
                   ))}
                 </Fragment>
@@ -342,8 +395,8 @@ export function ProviderCard({
         )}
 
       </div>
-      {showSeparator && <Separator />}
-    </div>
+      {showSeparator && !dashboard && <Separator />}
+    </section>
   )
 }
 
@@ -355,6 +408,8 @@ function MetricLineRenderer({
   onResetTimerDisplayModeToggle,
   now,
   refreshing,
+  stale = false,
+  recentForecast,
 }: {
   line: MetricLine
   displayMode: DisplayMode
@@ -363,13 +418,15 @@ function MetricLineRenderer({
   onResetTimerDisplayModeToggle?: () => void
   now: number
   refreshing?: boolean
+  stale?: boolean
+  recentForecast?: RecentQuotaForecast | null
 }) {
   if (line.type === "text") {
     return (
       <div>
         <div className="flex justify-between items-center h-[18px] gap-2">
-          <span className="text-xs text-muted-foreground min-w-0 truncate" title={line.label}>
-            {line.label}
+          <span className="text-xs text-muted-foreground min-w-0 truncate" title={metricLabel(line.label)}>
+            {metricLabel(line.label)}
           </span>
           <span
             className="text-xs text-muted-foreground truncate flex-shrink-0 max-w-[45%] text-right"
@@ -390,7 +447,7 @@ function MetricLineRenderer({
     return (
       <div>
         <div className="flex justify-between items-center h-[22px]">
-          <span className="text-sm text-muted-foreground flex-shrink-0">{line.label}</span>
+          <span className="text-sm text-muted-foreground flex-shrink-0">{metricLabel(line.label)}</span>
           <Badge
             variant="outline"
             className="truncate min-w-0 max-w-[60%]"
@@ -413,28 +470,28 @@ function MetricLineRenderer({
 
   if (line.type === "barChart") {
     return (
-      <UsageSparkline label={line.label} points={line.points} note={line.note} color={line.color} />
+      <UsageSparkline label={metricLabel(line.label)} points={line.points} note={line.note} color={line.color} />
     )
   }
 
   if (line.type === "progress") {
     const resetsAtMs = line.resetsAt ? Date.parse(line.resetsAt) : Number.NaN
     const periodDurationMs = line.periodDurationMs
-    const hasPaceContext = Number.isFinite(resetsAtMs) && Number.isFinite(periodDurationMs)
+    const hasPaceContext = !stale && Number.isFinite(resetsAtMs) && Number.isFinite(periodDurationMs)
     const hasTimeMarkerContext = hasPaceContext && periodDurationMs! > 0
     const shownAmount =
       displayMode === "used"
         ? line.used
         : Math.max(0, line.limit - line.used)
     const percent = Math.round(clamp01(shownAmount / line.limit) * 10000) / 100
-    const leftSuffix = displayMode === "left" ? " left" : ""
+    const amountPrefix = displayMode === "left" ? "剩餘 " : "已用 "
 
     const primaryText =
       line.format.kind === "percent"
-        ? `${Math.round(shownAmount)}%${leftSuffix}`
+        ? `${amountPrefix}${Math.round(shownAmount)}%`
         : line.format.kind === "dollars"
-          ? `$${formatFixedPrecisionNumber(shownAmount)}${leftSuffix}`
-          : `${formatCountNumber(shownAmount)} ${line.format.suffix}${leftSuffix}`
+          ? `${amountPrefix}$${formatFixedPrecisionNumber(shownAmount)}`
+          : `${amountPrefix}${formatCountNumber(shownAmount)} ${countUnit(line.format.suffix)}`
 
     const resetLabel = line.resetsAt
       ? resetTimerDisplayMode === "absolute"
@@ -453,10 +510,10 @@ function MetricLineRenderer({
     const secondaryText =
       resetLabel ??
       (line.format.kind === "percent"
-        ? `${line.limit}% cap`
+        ? `上限 ${formatCountNumber(line.limit)}%`
         : line.format.kind === "dollars"
-          ? `$${formatFixedPrecisionNumber(line.limit)} limit`
-          : `${formatCountNumber(line.limit)} ${line.format.suffix}`)
+          ? `上限 $${formatFixedPrecisionNumber(line.limit)}`
+          : `上限 ${formatCountNumber(line.limit)} ${countUnit(line.format.suffix)}`)
 
     // Calculate pace status if we have reset time and period duration
     const paceResult = hasPaceContext
@@ -474,15 +531,7 @@ function MetricLineRenderer({
     const isLimitReached = line.used >= line.limit
     const paceDetailText =
       hasPaceContext && !isLimitReached
-        ? buildPaceDetailText({
-            paceResult,
-            used: line.used,
-            limit: line.limit,
-            periodDurationMs: periodDurationMs!,
-            resetsAtMs,
-            nowMs: now,
-            displayMode,
-          })
+        ? recentForecast?.detailText ?? "近期增量不足，暫不預測耗盡時間"
         : null
 
     const deficit = hasPaceContext && !isLimitReached
@@ -491,26 +540,18 @@ function MetricLineRenderer({
     const deficitText = deficit !== null
       ? formatDeficitText(deficit, line.format, displayMode)
       : null
-    const runsOutText = hasPaceContext && !isLimitReached
-      ? formatRunsOutText({
-          paceResult,
-          used: line.used,
-          limit: line.limit,
-          periodDurationMs: periodDurationMs!,
-          resetsAtMs,
-          nowMs: now,
-        })
-      : null
+    const runsOutText = hasPaceContext && !isLimitReached ? recentForecast?.runsOutText : null
 
     return (
       <div>
         <div className="text-sm font-medium mb-1.5 flex items-center gap-1.5">
-          {line.label}
+          {metricLabel(line.label)}
           {paceStatus && (
             <PaceIndicator status={paceStatus} detailText={paceDetailText} isLimitReached={isLimitReached} />
           )}
         </div>
         <Progress
+          aria-label={metricLabel(line.label)}
           value={percent}
           indicatorColor={line.color}
           markerValue={paceMarkerValue}

@@ -37,6 +37,56 @@ describe("claude plugin ccusage usage trend", () => {
     vi.resetModules()
   })
 
+  it.each([
+    [{ status: "runner_failed", reason: "timed_out" }, "Token 統計逾時，額度仍可使用"],
+    [{ status: "runner_failed", reason: "probe_budget_exhausted" }, "本次先顯示額度，Token 統計稍後再試"],
+    [{ status: "no_runner" }, "Token 統計工具尚未就緒"],
+    [{ status: "runner_failed" }, "暫時無法取得 Token 統計"],
+  ])("preserves live quota when optional Token statistics return %j", async (ccusageResult, text) => {
+    const ctx = makeProbeCtx({ ccusageResult })
+    const plugin = await loadPlugin()
+    const result = plugin.probe(ctx)
+    expect(result.lines).toContainEqual(expect.objectContaining({ type: "progress", label: "Session", used: 30, limit: 100 }))
+    expect(result.lines).toContainEqual(expect.objectContaining({ type: "progress", label: "Weekly", used: 50, limit: 100 }))
+    expect(result.lines).toContainEqual(expect.objectContaining({ type: "badge", label: "Token usage", text }))
+    expect(result.lines.some((line) => line.label === "Error")).toBe(false)
+    expect(result.lines.some((line) => line.label === "Today")).toBe(false)
+  })
+
+  it("keeps quota and logs no raw runner exception or credentials", async () => {
+    const ctx = makeProbeCtx()
+    ctx.host.ccusage.query.mockImplementation(() => { throw new Error("SECRET-token private@example.invalid /Users/private/log.json") })
+    const result = (await loadPlugin()).probe(ctx)
+    expect(result.lines.find((line) => line.label === "Session")).toBeTruthy()
+    expect(result.lines.find((line) => line.label === "Token usage").text).toBe("暫時無法取得 Token 統計")
+    const errors = ctx.host.log.error.mock.calls.flat().join(" ")
+    expect(errors).toMatch(/stage=tokens outcome=runner_failed elapsed_ms=\d+/)
+    for (const secret of ["SECRET", "private@", "/Users/private"]) expect(errors).not.toContain(secret)
+  })
+
+  it("reports fixed probe stages in acquisition order", async () => {
+    const ctx = makeProbeCtx()
+    ctx.host.probe = { stage: vi.fn() }
+    ;(await loadPlugin()).probe(ctx)
+    expect(ctx.host.probe.stage.mock.calls.map(([name]) => name)).toEqual(["credentials", "quota", "tokens", "complete"])
+  })
+
+  it("does not claim quota is available when the source returned none", async () => {
+    const ctx = makeProbeCtx({ ccusageResult: { status: "runner_failed", reason: "timed_out" } })
+    ctx.host.http.request.mockReturnValue({ status: 200, bodyText: "{}" })
+    const result = (await loadPlugin()).probe(ctx)
+    expect(result.lines.find((line) => line.label === "Token usage").text).toBe("Token 統計逾時，稍後再試")
+    expect(result.lines.some((line) => line.type === "progress")).toBe(false)
+  })
+
+  it("stays at credentials when login is unavailable", async () => {
+    const ctx = makeCtx()
+    ctx.host.probe = { stage: vi.fn() }
+    const plugin = await loadPlugin()
+    expect(() => plugin.probe(ctx)).toThrow("Not logged in")
+    expect(ctx.host.probe.stage.mock.calls.map(([name]) => name)).toEqual(["credentials"])
+  })
+
   it("adds model percentage text lines and a usage chart from claude ccusage", async () => {
     const todayKey = localDayKey(new Date())
     const yesterdayKey = localDayKey(new Date(Date.now() - 24 * 60 * 60 * 1000))

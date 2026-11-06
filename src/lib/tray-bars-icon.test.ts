@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/image", () => ({
 }))
 
 import { getTrayIconSizePx, makeTrayBarsSvg, renderTrayBarsIcon } from "@/lib/tray-bars-icon"
+import { Image } from "@tauri-apps/api/image"
 
 describe("tray-bars-icon", () => {
   it("getTrayIconSizePx renders 18px at 1x and 36px at 2x", () => {
@@ -133,6 +134,52 @@ describe("tray-bars-icon", () => {
       percentText: "70%",
     })
     expect(svg).toContain(">70%</text>")
+  })
+
+  it.each([18, 36])("draws every provider logo directly on canvas at %spx without a four-item limit", async (sizePx) => {
+    const providerItems = Array.from({ length: 6 }, (_, index) => ({
+      id: `provider-${index}`, fraction: index / 5,
+      percentText: `${index * 20}%`, iconUrl: `provider-${index}.svg`,
+    }))
+    const originalImage = window.Image
+    const loadedUrls: string[] = []
+    const ctx = {
+      clearRect: vi.fn(), drawImage: vi.fn(), fillText: vi.fn(),
+      beginPath: vi.fn(), arc: vi.fn(), stroke: vi.fn(),
+      getImageData: vi.fn((_x: number, _y: number, w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4) })),
+    }
+    const contextSpy = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D)
+    // The direct image URLs are intentionally tracked: wrapping them inside an
+    // outer SVG regresses provider icons in real macOS 13 WebKit at 1x.
+    window.Image = class {
+      onload: null | (() => void) = null
+      onerror: null | (() => void) = null
+      decoding = "async"
+      set src(value: string) {
+        loadedUrls.push(value)
+        queueMicrotask(() => value === "broken.svg" ? this.onerror?.() : this.onload?.())
+      }
+    } as unknown as typeof window.Image
+    try {
+      await renderTrayBarsIcon({ bars: [], sizePx, providerItems })
+      expect(loadedUrls).toEqual(providerItems.map((item) => item.iconUrl))
+      expect(ctx.drawImage).toHaveBeenCalledTimes(6)
+      expect(ctx.fillText.mock.calls.map((call) => call[0])).toEqual(providerItems.map((item) => item.percentText))
+      const positions = ctx.drawImage.mock.calls.map((call) => Number(call[1]))
+      expect(positions.every((value, index) => index === 0 || value > positions[index - 1])).toBe(true)
+      const [, , width, height] = ctx.getImageData.mock.calls.at(-1)!
+      expect(width).toBeGreaterThan(sizePx * providerItems.length)
+      expect(height).toBe(sizePx)
+      expect(Image.new).toHaveBeenLastCalledWith(expect.any(Uint8Array), width, sizePx)
+
+      ctx.arc.mockClear()
+      await renderTrayBarsIcon({ bars: [], sizePx, providerItems: [{ ...providerItems[0], iconUrl: undefined }, providerItems[1]] })
+      expect(ctx.arc).toHaveBeenCalledOnce()
+      await expect(renderTrayBarsIcon({ bars: [], sizePx, providerItems: [{ ...providerItems[0], iconUrl: "broken.svg" }, providerItems[1]] })).rejects.toThrow("Failed to load tray icon for provider-0")
+    } finally {
+      window.Image = originalImage
+      contextSpy.mockRestore()
+    }
   })
 
   it("renderTrayBarsIcon rasterizes SVG to an Image using canvas", async () => {

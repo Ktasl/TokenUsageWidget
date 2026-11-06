@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, within } from "@testing-library/react"
 import type { ReactNode } from "react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -47,6 +47,7 @@ const defaultProps = {
   plugins: [{ id: "a", name: "Alpha", enabled: true }],
   onReorder: vi.fn(),
   onToggle: vi.fn(),
+  onMetricChange: vi.fn(),
   autoUpdateInterval: 15 as const,
   onAutoUpdateIntervalChange: vi.fn(),
   themeMode: "system" as const,
@@ -62,6 +63,7 @@ const defaultProps = {
   menubarMetric: "default" as const,
   onMenubarMetricChange: vi.fn(),
   traySettingsPreview: {
+    providerItems: [{ id: "a", fraction: 0.7, percentText: "70%", iconUrl: "icon-a" }],
     bars: [{ id: "a", fraction: 0.7 }],
     providerBars: [{ id: "a", fraction: 0.7 }],
     providerIconUrl: "icon-a",
@@ -77,218 +79,197 @@ afterEach(() => {
   cleanup()
 })
 
+async function openServices() { await userEvent.click(screen.getByRole("tab", { name: "服務與模型" })) }
+async function openSystem() { await userEvent.click(screen.getByRole("tab", { name: "更新與系統" })) }
+
 describe("SettingsPage", () => {
-  it("toggles plugins", async () => {
+  it("defaults to display and groups settings into three categories", async () => {
+    render(<SettingsPage {...defaultProps} />)
+    expect(screen.getByRole("tab", { name: "顯示與外觀" })).toHaveAttribute("aria-selected", "true")
+    expect(screen.getByText("介面主題")).toBeInTheDocument()
+    expect(screen.queryByText("我的 AI 服務")).not.toBeInTheDocument()
+    await openServices()
+    expect(screen.getByText("我的 AI 服務")).toBeInTheDocument()
+    expect(screen.queryByText("介面主題")).not.toBeInTheDocument()
+    await openSystem()
+    expect(screen.getByText("自動更新額度")).toBeInTheDocument()
+    expect(screen.queryByText("我的 AI 服務")).not.toBeInTheDocument()
+  })
+
+  it("supports keyboard category navigation", async () => {
+    render(<SettingsPage {...defaultProps} />)
+    screen.getByRole("tab", { name: "顯示與外觀" }).focus()
+    await userEvent.keyboard("{ArrowRight}")
+    expect(screen.getByRole("tab", { name: "服務與模型" })).toHaveFocus()
+    expect(screen.getByRole("tab", { name: "服務與模型" })).toHaveAttribute("aria-selected", "true")
+    await userEvent.keyboard("{End}")
+    expect(screen.getByRole("tab", { name: "更新與系統" })).toHaveFocus()
+    await userEvent.keyboard("{Home}")
+    expect(screen.getByRole("tab", { name: "顯示與外觀" })).toHaveFocus()
+  })
+
+  it("toggles an enabled service through its labelled checkbox", async () => {
     const onToggle = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        plugins={[
-          { id: "b", name: "Beta", enabled: false },
-        ]}
-        onToggle={onToggle}
-      />
-    )
-    const checkboxes = screen.getAllByRole("checkbox")
-    await userEvent.click(checkboxes[checkboxes.length - 1])
+    render(<SettingsPage {...defaultProps} plugins={[{ id: "b", name: "Beta", enabled: false }]} onToggle={onToggle} />)
+    await openServices()
+    await userEvent.click(screen.getByRole("checkbox", { name: "啟用 Beta" }))
+    expect(onToggle).toHaveBeenCalledOnce()
     expect(onToggle).toHaveBeenCalledWith("b")
   })
 
-  it("reorders plugins on drag end", () => {
+  it("reorders services on drag end", async () => {
     const onReorder = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        plugins={[
-          { id: "a", name: "Alpha", enabled: true },
-          { id: "b", name: "Beta", enabled: true },
-        ]}
-        onReorder={onReorder}
-      />
-    )
+    render(<SettingsPage {...defaultProps} plugins={[{ id: "a", name: "Alpha", enabled: true }, { id: "b", name: "Beta", enabled: true }]} onReorder={onReorder} />)
+    await openServices()
     latestOnDragEnd?.({ active: { id: "a" }, over: { id: "b" } })
     expect(onReorder).toHaveBeenCalledWith(["b", "a"])
   })
 
-  it("ignores invalid drag end", () => {
+  it("ignores missing, unchanged, and unknown drag targets", async () => {
     const onReorder = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onReorder={onReorder}
-      />
-    )
+    render(<SettingsPage {...defaultProps} onReorder={onReorder} />)
+    await openServices()
     latestOnDragEnd?.({ active: { id: "a" }, over: null })
     latestOnDragEnd?.({ active: { id: "a" }, over: { id: "a" } })
+    latestOnDragEnd?.({ active: { id: "a" }, over: { id: "unknown" } })
     expect(onReorder).not.toHaveBeenCalled()
   })
 
-  it("updates auto-update interval", async () => {
+  it("selects a service metric while preserving its raw label", async () => {
+    const onMetricChange = vi.fn()
+    render(<SettingsPage {...defaultProps} onMetricChange={onMetricChange} plugins={[{
+      id: "a", name: "Alpha", enabled: true, selectedMetric: "",
+      metricOptions: [{ value: "Session", label: "Session" }, { value: "Weekly", label: "Weekly" }],
+    }]} />)
+    await openServices()
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Alpha 的選單列模型／額度" }), "Weekly")
+    expect(onMetricChange).toHaveBeenCalledWith("a", "Weekly")
+  })
+
+  it("allows returning a service metric to automatic", async () => {
+    const onMetricChange = vi.fn()
+    render(<SettingsPage {...defaultProps} onMetricChange={onMetricChange} plugins={[{
+      id: "a", name: "Alpha", enabled: true, selectedMetric: "Weekly", metricOptions: [{ value: "Weekly", label: "Weekly" }],
+    }]} />)
+    await openServices()
+    await userEvent.selectOptions(screen.getByRole("combobox"), "")
+    expect(onMetricChange).toHaveBeenCalledWith("a", "")
+  })
+
+  it("retains the selected label when it temporarily has no quota data", async () => {
+    render(<SettingsPage {...defaultProps} plugins={[{ id: "a", name: "Alpha", enabled: true, selectedMetric: "GPT Custom", metricOptions: [{ value: "Weekly", label: "Weekly" }] }]} />)
+    await openServices()
+    expect(screen.getByRole("combobox")).toHaveValue("GPT Custom")
+    expect(screen.getByRole("option", { name: "GPT Custom（暫無資料）" })).toBeInTheDocument()
+    expect(screen.getByText(/指定項目沒有有效資料時/)).toBeInTheDocument()
+  })
+
+  it("explains when a service has no selectable quota", async () => {
+    render(<SettingsPage {...defaultProps} />)
+    await openServices()
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument()
+    expect(screen.getByText("尚無可選額度，取得資料後即可選擇。")).toBeInTheDocument()
+  })
+
+  it("updates the refresh interval under system settings", async () => {
     const onAutoUpdateIntervalChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onAutoUpdateIntervalChange={onAutoUpdateIntervalChange}
-      />
-    )
-    await userEvent.click(screen.getByText("30 min"))
+    render(<SettingsPage {...defaultProps} onAutoUpdateIntervalChange={onAutoUpdateIntervalChange} />)
+    await openSystem()
+    await userEvent.click(screen.getByRole("radio", { name: "30分鐘" }))
     expect(onAutoUpdateIntervalChange).toHaveBeenCalledWith(30)
   })
 
-  it("shows auto-update helper text", () => {
-    render(<SettingsPage {...defaultProps} />)
-    expect(screen.getByText("How obsessive are you")).toBeInTheDocument()
-  })
-
-  it("renders app theme section with theme options", () => {
-    render(<SettingsPage {...defaultProps} />)
-    expect(screen.getByText("App Theme")).toBeInTheDocument()
-    expect(screen.getByText("How it looks around here")).toBeInTheDocument()
-    expect(screen.getByText("System")).toBeInTheDocument()
-    expect(screen.getByText("Light")).toBeInTheDocument()
-    expect(screen.getByText("Dark")).toBeInTheDocument()
-  })
-
-  it("updates theme mode", async () => {
+  it("updates the theme", async () => {
     const onThemeModeChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onThemeModeChange={onThemeModeChange}
-      />
-    )
-    await userEvent.click(screen.getByText("Dark"))
+    render(<SettingsPage {...defaultProps} onThemeModeChange={onThemeModeChange} />)
+    await userEvent.click(screen.getByRole("radio", { name: "深色" }))
     expect(onThemeModeChange).toHaveBeenCalledWith("dark")
   })
 
-  it("updates display mode", async () => {
+  it("updates remaining versus used display", async () => {
     const onDisplayModeChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onDisplayModeChange={onDisplayModeChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: "Left" }))
+    render(<SettingsPage {...defaultProps} onDisplayModeChange={onDisplayModeChange} />)
+    await userEvent.click(screen.getByRole("radio", { name: "剩餘" }))
     expect(onDisplayModeChange).toHaveBeenCalledWith("left")
   })
 
-  it("updates reset timer display mode", async () => {
+  it("updates reset timer display", async () => {
     const onResetTimerDisplayModeChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onResetTimerDisplayModeChange={onResetTimerDisplayModeChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: /Absolute/ }))
+    render(<SettingsPage {...defaultProps} onResetTimerDisplayModeChange={onResetTimerDisplayModeChange} />)
+    await userEvent.click(screen.getByRole("radio", { name: "日期時間" }))
     expect(onResetTimerDisplayModeChange).toHaveBeenCalledWith("absolute")
   })
 
-  it("renders renamed usage section heading", () => {
-    render(<SettingsPage {...defaultProps} />)
-    expect(screen.getByText("Usage Mode")).toBeInTheDocument()
-  })
-
-  it("renders reset timers section heading", () => {
-    render(<SettingsPage {...defaultProps} />)
-    expect(screen.getByText("Reset Timers")).toBeInTheDocument()
-  })
-
-  it("renders time format section heading", () => {
-    render(<SettingsPage {...defaultProps} />)
-    expect(screen.getByText("Time Format")).toBeInTheDocument()
-    expect(screen.getByText("12-hour or 24-hour clock")).toBeInTheDocument()
-  })
-
-  it("updates time format mode to 12h", async () => {
+  it.each([["12小時制", "12h"], ["24小時制", "24h"]])("updates the time format to %s", async (label, value) => {
     const onTimeFormatModeChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onTimeFormatModeChange={onTimeFormatModeChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: "12-hour" }))
-    expect(onTimeFormatModeChange).toHaveBeenCalledWith("12h")
+    render(<SettingsPage {...defaultProps} onTimeFormatModeChange={onTimeFormatModeChange} />)
+    await userEvent.click(screen.getByRole("radio", { name: label }))
+    expect(onTimeFormatModeChange).toHaveBeenCalledWith(value)
   })
 
-  it("updates time format mode to 24h", async () => {
-    const onTimeFormatModeChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onTimeFormatModeChange={onTimeFormatModeChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: "24-hour" }))
-    expect(onTimeFormatModeChange).toHaveBeenCalledWith("24h")
-  })
-
-  it("renders menubar icon section", () => {
+  it("states that the preview is abbreviated but the actual menu bar has no service cap", () => {
     render(<SettingsPage {...defaultProps} />)
-    expect(screen.getByText("Menubar Icon")).toBeInTheDocument()
-    expect(screen.getByText("What shows in the menu bar")).toBeInTheDocument()
+    expect(screen.getByText("服務圖示會顯示所有已啟用且有有效額度的服務，數量沒有上限。")).toBeInTheDocument()
+    expect(screen.getByText("預覽只列部分；實際依已啟用服務顯示。缺資料顯示 --，不當作零或 100%。")).toBeInTheDocument()
   })
 
-  it("clicking Bars triggers onMenubarIconStyleChange(\"bars\")", async () => {
+  it("selects dual quota and explains Antigravity Gemini and Claude together", async () => {
+    const change = vi.fn()
+    render(<SettingsPage {...defaultProps} onMenubarIconStyleChange={change} />)
+    await userEvent.click(screen.getByRole("radio", { name: "雙額度與倒數" }))
+    expect(change).toHaveBeenCalledWith("quota")
+    expect(screen.getByText(/Antigravity 為 Gemini、Claude 並列/)).toBeInTheDocument()
+  })
+
+  it("offers compact large icons alongside the saved detailed theme", async () => {
+    const change = vi.fn()
+    render(<SettingsPage {...defaultProps} menubarIconStyle="quota" onMenubarIconStyleChange={change} />)
+    expect(screen.getByRole("radio", { name: "雙額度與倒數" })).toHaveAttribute("aria-checked", "true")
+    await userEvent.click(screen.getByRole("radio", { name: "圖示大字" }))
+    expect(change).toHaveBeenCalledWith("compact")
+    expect(screen.getByText(/以圖示與較大的百分比呈現，不顯示時間/)).toBeInTheDocument()
+    expect(screen.getByRole("radiogroup", { name: "選單列圖示樣式" }).querySelectorAll('[role="radio"]')).toHaveLength(5)
+  })
+
+  it("previews two service icons including zero and counts additional services", () => {
+    render(<SettingsPage {...defaultProps} traySettingsPreview={{ ...defaultProps.traySettingsPreview, providerItems: [
+      { id: "a", fraction: 0.7, percentText: "70%", iconUrl: "icon-a" },
+      { id: "b", fraction: 0, percentText: "0%", iconUrl: "icon-b" },
+      { id: "c", fraction: 0.4, percentText: "40%", iconUrl: "icon-c" },
+    ] }} />)
+    const provider = screen.getByRole("radio", { name: "服務圖示" })
+    expect(provider).toHaveTextContent("70%")
+    expect(provider).toHaveTextContent("0%")
+    expect(provider).toHaveTextContent("+1")
+    expect(provider.querySelector('[title="b: 0%"]')).toBeInTheDocument()
+  })
+
+  it("keeps the placeholder when no service has quota data", () => {
+    render(<SettingsPage {...defaultProps} traySettingsPreview={{ ...defaultProps.traySettingsPreview, providerItems: [], providerPercentText: "--%" }} />)
+    expect(screen.getByRole("radio", { name: "服務圖示" })).toHaveTextContent("--%")
+  })
+
+  it.each([["長條", "bars"], ["圓環", "donut"]])("changes the menu bar style to %s", async (label, value) => {
     const onMenubarIconStyleChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onMenubarIconStyleChange={onMenubarIconStyleChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: "Bars" }))
-    expect(onMenubarIconStyleChange).toHaveBeenCalledWith("bars")
+    render(<SettingsPage {...defaultProps} onMenubarIconStyleChange={onMenubarIconStyleChange} />)
+    await userEvent.click(screen.getByRole("radio", { name: label }))
+    expect(onMenubarIconStyleChange).toHaveBeenCalledWith(value)
   })
 
-  it("clicking Donut triggers onMenubarIconStyleChange(\"donut\")", async () => {
-    const onMenubarIconStyleChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onMenubarIconStyleChange={onMenubarIconStyleChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: "Donut" }))
-    expect(onMenubarIconStyleChange).toHaveBeenCalledWith("donut")
-  })
-
-  it("renders the menubar metric control", () => {
-    render(<SettingsPage {...defaultProps} />)
-    expect(screen.getByText("Metric")).toBeInTheDocument()
-    expect(screen.getByRole("radio", { name: "Default" })).toBeInTheDocument()
-    expect(screen.getByRole("radio", { name: "Weekly" })).toBeInTheDocument()
-  })
-
-  it("clicking Weekly triggers onMenubarMetricChange(\"weekly\")", async () => {
+  it("changes the automatic quota preference to weekly", async () => {
     const onMenubarMetricChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onMenubarMetricChange={onMenubarMetricChange}
-      />
-    )
-    await userEvent.click(screen.getByRole("radio", { name: "Weekly" }))
+    render(<SettingsPage {...defaultProps} onMenubarMetricChange={onMenubarMetricChange} />)
+    const group = screen.getByRole("radiogroup", { name: "選單列額度偏好" })
+    expect(within(group).getByRole("radio", { name: "預設" })).toBeInTheDocument()
+    await userEvent.click(within(group).getByRole("radio", { name: "每週" }))
     expect(onMenubarMetricChange).toHaveBeenCalledWith("weekly")
   })
 
-  it("does not render removed bar icon controls", () => {
-    render(<SettingsPage {...defaultProps} />)
-    expect(screen.queryByText("Bar Icon")).not.toBeInTheDocument()
-    expect(screen.queryByText("Show percentage")).not.toBeInTheDocument()
-  })
-
-  it("toggles start on login checkbox", async () => {
+  it("toggles start on login under system settings", async () => {
     const onStartOnLoginChange = vi.fn()
-    render(
-      <SettingsPage
-        {...defaultProps}
-        onStartOnLoginChange={onStartOnLoginChange}
-      />
-    )
-    await userEvent.click(screen.getByText("Start on login"))
+    render(<SettingsPage {...defaultProps} onStartOnLoginChange={onStartOnLoginChange} />)
+    await openSystem()
+    await userEvent.click(screen.getByRole("checkbox", { name: "登入時自動啟動" }))
     expect(onStartOnLoginChange).toHaveBeenCalledWith(true)
   })
 })

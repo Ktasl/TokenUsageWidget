@@ -17,6 +17,7 @@ type AppShellProps = {
   displayPlugins: DisplayPluginState[]
   settingsPlugins: SettingsPluginState[]
   autoUpdateNextAt: number | null
+  backgroundError?: string | null
   selectedPlugin: DisplayPluginState | null
   onPluginContextAction: (pluginId: string, action: PluginContextAction) => void
   isPluginRefreshAvailable: (pluginId: string) => boolean
@@ -30,6 +31,7 @@ export function AppShell({
   displayPlugins,
   settingsPlugins,
   autoUpdateNextAt,
+  backgroundError,
   selectedPlugin,
   onPluginContextAction,
   isPluginRefreshAvailable,
@@ -55,6 +57,7 @@ export function AppShell({
     scrollRef,
     canScrollDown,
     maxPanelHeightPx,
+    panelWidthPx,
   } = usePanel({
     activeView,
     setActiveView,
@@ -70,9 +73,9 @@ export function AppShell({
     <div
       ref={containerRef}
       tabIndex={-1}
-      className="flex flex-col items-center p-6 pt-1.5 bg-transparent outline-none"
+      className="flex flex-col items-center p-3 pt-1.5 bg-transparent outline-none"
+      style={{ width: `${panelWidthPx}px` }}
     >
-      <div className="tray-arrow" />
       <div
         className="relative bg-card rounded-xl overflow-hidden select-none w-full border shadow-lg flex flex-col"
         style={maxPanelHeightPx ? { maxHeight: `${maxPanelHeightPx - ARROW_OVERHEAD_PX}px` } : undefined}
@@ -89,6 +92,7 @@ export function AppShell({
           <div className="flex-1 flex flex-col px-3 pt-2 pb-1.5 min-w-0 bg-card dark:bg-muted/50">
             <div className="relative flex-1 min-h-0">
               <div ref={scrollRef} className="h-full overflow-y-auto scrollbar-none">
+                {backgroundError && <p role="alert" className="mb-2 rounded-lg border border-amber-500/40 p-2 text-xs">{backgroundError}</p>}
                 <AppContent
                   {...appContentProps}
                   displayPlugins={displayPlugins}

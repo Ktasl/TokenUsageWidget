@@ -15,16 +15,16 @@ const nowMs = Date.parse("2026-02-02T12:00:00.000Z")
 
 describe("pace-tooltip", () => {
   it("maps pace status labels", () => {
-    expect(getPaceStatusText("ahead")).toBe("Plenty of room")
-    expect(getPaceStatusText("on-track")).toBe("Right on target")
-    expect(getPaceStatusText("behind")).toBe("Will run out")
+    expect(getPaceStatusText("ahead")).toBe("額度充裕")
+    expect(getPaceStatusText("on-track")).toBe("用量符合預期")
+    expect(getPaceStatusText("behind")).toBe("可能提前用盡")
   })
 
   it("formats compact durations", () => {
-    expect(formatCompactDuration(30_000)).toBe("<1m")
-    expect(formatCompactDuration(5 * 60_000)).toBe("5m")
-    expect(formatCompactDuration((8 * 60 + 5) * 60_000)).toBe("8h 5m")
-    expect(formatCompactDuration((2 * 24 + 3) * 60 * 60_000)).toBe("2d 3h")
+    expect(formatCompactDuration(30_000)).toBe("不到 1 分鐘")
+    expect(formatCompactDuration(5 * 60_000)).toBe("5 分")
+    expect(formatCompactDuration((8 * 60 + 5) * 60_000)).toBe("8 小時 5 分")
+    expect(formatCompactDuration((2 * 24 + 3) * 60 * 60_000)).toBe("2 天 3 小時")
   })
 
   it("returns null for invalid compact duration", () => {
@@ -44,7 +44,7 @@ describe("pace-tooltip", () => {
       nowMs,
       displayMode: "used",
     })
-    expect(detail).toBe("Limit in 8h 0m")
+    expect(detail).toBe("預計 8 小時 0 分後達上限")
   })
 
   it("shows projected % used at reset for on-track (displayMode=used)", () => {
@@ -58,7 +58,7 @@ describe("pace-tooltip", () => {
       nowMs,
       displayMode: "used",
     })
-    expect(detail).toBe("90% used at reset")
+    expect(detail).toBe("預計重設時已用 90%")
   })
 
   it("shows projected % left at reset for on-track (displayMode=left)", () => {
@@ -72,7 +72,7 @@ describe("pace-tooltip", () => {
       nowMs,
       displayMode: "left",
     })
-    expect(detail).toBe("10% left at reset")
+    expect(detail).toBe("預計重設時剩餘 10%")
   })
 
   it("shows projected % for ahead (displayMode=used)", () => {
@@ -86,7 +86,7 @@ describe("pace-tooltip", () => {
       nowMs,
       displayMode: "used",
     })
-    expect(detail).toBe("60% used at reset")
+    expect(detail).toBe("預計重設時已用 60%")
   })
 
   it("shows projected % for ahead (displayMode=left)", () => {
@@ -100,7 +100,7 @@ describe("pace-tooltip", () => {
       nowMs,
       displayMode: "left",
     })
-    expect(detail).toBe("40% left at reset")
+    expect(detail).toBe("預計重設時剩餘 40%")
   })
 
   it("clamps projected percent to 100% when behind without ETA", () => {
@@ -115,7 +115,7 @@ describe("pace-tooltip", () => {
       nowMs,
       displayMode: "used",
     })
-    expect(detail).toBe("100% used at reset")
+    expect(detail).toBe("預計重設時已用 100%")
   })
 
   it("clamps projected percent in left mode when behind without ETA", () => {
@@ -129,7 +129,7 @@ describe("pace-tooltip", () => {
       nowMs,
       displayMode: "left",
     })
-    expect(detail).toBe("0% left at reset")
+    expect(detail).toBe("預計重設時剩餘 0%")
   })
 
   it("returns null when pace result is unavailable", () => {
@@ -158,7 +158,7 @@ describe("pace-tooltip", () => {
       nowMs: lateNowMs,
       displayMode: "used",
     })
-    expect(detail).toBe("100% used at reset")
+    expect(detail).toBe("預計重設時已用 100%")
   })
 })
 
@@ -173,7 +173,7 @@ describe("formatRunsOutText", () => {
       resetsAtMs,
       nowMs,
     })
-    expect(result).toBe("Runs out in 8h 0m")
+    expect(result).toBe("預計 8 小時 0 分後用盡")
   })
 
   it("keeps runs-out and limit-in duration text aligned", () => {
@@ -195,8 +195,8 @@ describe("formatRunsOutText", () => {
       nowMs,
       displayMode: "used",
     })
-    expect(runsOut).toBe("Runs out in 8h 0m")
-    expect(detail).toBe("Limit in 8h 0m")
+    expect(runsOut).toBe("預計 8 小時 0 分後用盡")
+    expect(detail).toBe("預計 8 小時 0 分後達上限")
   })
 
   it("returns null when ahead of pace", () => {
@@ -250,27 +250,27 @@ describe("formatRunsOutText", () => {
 
 describe("formatDeficitText", () => {
   it("formats percent deficit in used mode", () => {
-    expect(formatDeficitText(4, { kind: "percent" }, "used")).toBe("4% in deficit")
+    expect(formatDeficitText(4, { kind: "percent" }, "used")).toBe("超出預期 4%")
   })
 
   it("formats percent deficit in left mode", () => {
-    expect(formatDeficitText(4, { kind: "percent" }, "left")).toBe("4% short")
+    expect(formatDeficitText(4, { kind: "percent" }, "left")).toBe("不足 4%")
   })
 
   it("formats dollar deficit", () => {
-    expect(formatDeficitText(12.5, { kind: "dollars" }, "used")).toBe("$12.50 in deficit")
+    expect(formatDeficitText(12.5, { kind: "dollars" }, "used")).toBe("超出預期 $12.50")
   })
 
   it("formats count deficit", () => {
-    expect(formatDeficitText(15, { kind: "count", suffix: "requests" }, "used")).toBe("15 requests in deficit")
+    expect(formatDeficitText(15, { kind: "count", suffix: "requests" }, "used")).toBe("超出預期 15 次請求")
   })
 
   it("formats decimal count deficit without forced trailing zeros", () => {
-    expect(formatDeficitText(4.5, { kind: "count", suffix: "requests" }, "used")).toBe("4.5 requests in deficit")
+    expect(formatDeficitText(4.5, { kind: "count", suffix: "requests" }, "used")).toBe("超出預期 4.5 次請求")
   })
 
   it("rounds percent deficit", () => {
-    expect(formatDeficitText(4.7, { kind: "percent" }, "used")).toBe("5% in deficit")
+    expect(formatDeficitText(4.7, { kind: "percent" }, "used")).toBe("超出預期 5%")
   })
 
   it("returns null for tiny percent deficits that round to zero", () => {
@@ -287,14 +287,14 @@ describe("formatDeficitText", () => {
   })
 
   it("shows the first displayable percent deficit", () => {
-    expect(formatDeficitText(0.5, { kind: "percent" }, "used")).toBe("1% in deficit")
+    expect(formatDeficitText(0.5, { kind: "percent" }, "used")).toBe("超出預期 1%")
   })
 
   it("shows the first displayable dollar deficit", () => {
-    expect(formatDeficitText(0.005, { kind: "dollars" }, "used")).toBe("$0.01 in deficit")
+    expect(formatDeficitText(0.005, { kind: "dollars" }, "used")).toBe("超出預期 $0.01")
   })
 
   it("shows the first displayable count deficit", () => {
-    expect(formatDeficitText(0.005, { kind: "count", suffix: "requests" }, "used")).toBe("0.01 requests in deficit")
+    expect(formatDeficitText(0.005, { kind: "count", suffix: "requests" }, "used")).toBe("超出預期 0.01 次請求")
   })
 })

@@ -46,6 +46,18 @@ describe("minimax plugin", () => {
     vi.restoreAllMocks()
   })
 
+  it.each(["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY"])("does not choose another endpoint or key when %s initialization failed", async (failedName) => {
+    const ctx = makeCtx()
+    ctx.host.env.get.mockImplementation((name) => {
+      if (name === failedName) throw new Error("ENV_LOOKUP_UNAVAILABLE")
+      if (name === "MINIMAX_API_KEY" || name === "MINIMAX_API_TOKEN") return "fixture-global-key"
+      return null
+    })
+    const plugin = await loadPlugin()
+    expect(() => plugin.probe(ctx)).toThrow("ENV_LOOKUP_UNAVAILABLE")
+    expect(ctx.host.http.request).not.toHaveBeenCalled()
+  })
+
   it("throws when API key is missing", async () => {
     const ctx = makeCtx()
     setEnv(ctx, {})

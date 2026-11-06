@@ -1,3 +1,4 @@
+import { DISPLAY_LOCALE } from "@/lib/locale"
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 
@@ -15,7 +16,7 @@ export function clamp01(value: number): number {
 export function formatFixedPrecisionNumber(value: number): string {
   if (!Number.isFinite(value)) return "0"
   const fractionDigits = Number.isInteger(value) ? 0 : 2
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat(DISPLAY_LOCALE, {
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
   }).format(value)
@@ -24,5 +25,5 @@ export function formatFixedPrecisionNumber(value: number): string {
 export function formatCountNumber(value: number): string {
   if (!Number.isFinite(value)) return "0"
   const maximumFractionDigits = Number.isInteger(value) ? 0 : 2
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits }).format(value)
+  return new Intl.NumberFormat(DISPLAY_LOCALE, { maximumFractionDigits }).format(value)
 }

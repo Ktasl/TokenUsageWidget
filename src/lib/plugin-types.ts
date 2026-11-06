@@ -1,3 +1,5 @@
+import type { TokenUsageReport } from "@/lib/token-report"
+
 export type ProgressFormat =
   | { kind: "percent" }
   | { kind: "dollars" }
@@ -41,6 +43,7 @@ export type PluginOutput = {
   plan?: string
   lines: MetricLine[]
   iconUrl: string
+  tokenUsageReport?: TokenUsageReport
 }
 
 export type PluginMeta = {

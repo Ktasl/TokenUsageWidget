@@ -1,6 +1,8 @@
 pub mod host_api;
 pub mod manifest;
+mod probe_diagnostics;
 pub mod runtime;
+pub mod token_report;
 
 use manifest::LoadedPlugin;
 use std::path::{Path, PathBuf};

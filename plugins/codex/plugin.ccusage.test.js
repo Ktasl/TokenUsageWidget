@@ -62,7 +62,7 @@ describe("codex plugin ccusage usage trend", () => {
     const chart = result.lines.find((line) => line.label === "Usage Trend")
     expect(chart).toMatchObject({
       type: "barChart",
-      note: "Estimated from local Codex logs for the selected account.",
+      note: "Estimated from local Codex logs; account ownership is unverified.",
     })
     expect(chart.points.map((point) => point.value)).toEqual([150, 300])
 

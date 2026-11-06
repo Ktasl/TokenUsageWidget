@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { AboutDialog } from "@/components/about-dialog";
 import type { UpdateStatus } from "@/hooks/use-app-update";
 import { useNowTicker } from "@/hooks/use-now-ticker";
+import { APP_BUILD_NUMBER, APP_DISPLAY_NAME, IS_TEST_BUILD } from "@/lib/app-edition";
 
 interface PanelFooterProps {
   version: string;
@@ -29,13 +30,20 @@ function VersionDisplay({
   onUpdateCheck: () => void;
   onVersionClick: () => void;
 }) {
+  if (IS_TEST_BUILD) {
+    return (
+      <button type="button" onClick={onVersionClick} className="text-xs text-muted-foreground">
+        {APP_DISPLAY_NAME} {version}{APP_BUILD_NUMBER ? ` · ${APP_BUILD_NUMBER}` : ""}
+      </button>
+    );
+  }
   switch (updateStatus.status) {
     case "downloading":
       return (
         <span className="text-xs text-muted-foreground">
           {updateStatus.progress >= 0
-            ? `Downloading update ${updateStatus.progress}%`
-            : "Downloading update..."}
+            ? `正在下載更新 ${updateStatus.progress}%`
+            : "正在下載更新…"}
         </span>
       );
     case "ready":
@@ -46,12 +54,12 @@ function VersionDisplay({
           className="update-border-beam"
           onClick={onUpdateInstall}
         >
-          Restart to update
+          重新啟動以更新
         </Button>
       );
     case "installing":
       return (
-        <span className="text-xs text-muted-foreground">Installing...</span>
+        <span className="text-xs text-muted-foreground">正在安裝…</span>
       );
     case "error":
       if (updateStatus.message === "Update check failed") {
@@ -62,13 +70,13 @@ function VersionDisplay({
             className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
             title={updateStatus.message}
           >
-            Updates soon
+            稍後檢查更新
           </button>
         );
       }
       return (
         <span className="text-xs text-destructive" title={updateStatus.message}>
-          Update failed
+          更新失敗
         </span>
       );
     default:
@@ -78,7 +86,7 @@ function VersionDisplay({
           onClick={onVersionClick}
           className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
         >
-          OpenUsage {version}
+          {APP_DISPLAY_NAME} {version}
         </button>
       );
   }
@@ -101,14 +109,14 @@ export function PanelFooter({
   });
 
   const countdownLabel = useMemo(() => {
-    if (!autoUpdateNextAt) return "Paused";
+    if (!autoUpdateNextAt) return "已暫停";
     const remainingMs = Math.max(0, autoUpdateNextAt - now);
     const totalSeconds = Math.ceil(remainingMs / 1000);
     if (totalSeconds >= 60) {
       const minutes = Math.ceil(totalSeconds / 60);
-      return `Next update in ${minutes}m`;
+      return `${minutes} 分鐘後更新用量`;
     }
-    return `Next update in ${totalSeconds}s`;
+    return `${totalSeconds} 秒後更新用量`;
   }, [autoUpdateNextAt, now]);
 
   return (
@@ -129,7 +137,7 @@ export function PanelFooter({
               onRefreshAll()
             }}
             className="text-xs text-muted-foreground tabular-nums hover:text-foreground transition-colors cursor-pointer"
-            title="Refresh now"
+            title="立即更新用量"
           >
             {countdownLabel}
           </button>

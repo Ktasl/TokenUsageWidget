@@ -1,10 +1,11 @@
+import { countUnit } from "@/lib/locale"
 import type { PaceResult, PaceStatus } from "@/lib/pace-status"
 import type { ProgressFormat } from "@/lib/plugin-types"
 import type { DisplayMode } from "@/lib/settings"
 import { formatCountNumber, formatFixedPrecisionNumber } from "@/lib/utils"
 
 export function getPaceStatusText(status: PaceStatus): string {
-  return status === "ahead" ? "Plenty of room" : status === "on-track" ? "Right on target" : "Will run out"
+  return status === "ahead" ? "額度充裕" : status === "on-track" ? "用量符合預期" : "可能提前用盡"
 }
 
 export function formatCompactDuration(deltaMs: number): string | null {
@@ -16,10 +17,10 @@ export function formatCompactDuration(deltaMs: number): string | null {
   const hours = totalHours % 24
   const minutes = totalMinutes % 60
 
-  if (days > 0) return `${days}d ${hours}h`
-  if (totalHours > 0) return `${totalHours}h ${minutes}m`
-  if (totalMinutes > 0) return `${totalMinutes}m`
-  return "<1m"
+  if (days > 0) return `${days} 天 ${hours} 小時`
+  if (totalHours > 0) return `${totalHours} 小時 ${minutes} 分`
+  if (totalMinutes > 0) return `${totalMinutes} 分`
+  return "不到 1 分鐘"
 }
 
 function getRunsOutDurationText({
@@ -66,7 +67,7 @@ export function formatRunsOutText({
   nowMs: number
 }): string | null {
   const durationText = getRunsOutDurationText({ paceResult, used, limit, periodDurationMs, resetsAtMs, nowMs })
-  return durationText ? `Runs out in ${durationText}` : null
+  return durationText ? `預計 ${durationText}後用盡` : null
 }
 
 export function buildPaceDetailText({
@@ -90,14 +91,14 @@ export function buildPaceDetailText({
 
   if (paceResult.status === "behind") {
     const durationText = getRunsOutDurationText({ paceResult, used, limit, periodDurationMs, resetsAtMs, nowMs })
-    if (durationText) return `Limit in ${durationText}`
+    if (durationText) return `預計 ${durationText}後達上限`
   }
 
   // Show projected % at reset (clamped to 100%)
   const projectedPercent = Math.min(100, Math.round((paceResult.projectedUsage / limit) * 100))
   const shownPercent = displayMode === "left" ? 100 - projectedPercent : projectedPercent
-  const suffix = displayMode === "left" ? "left at reset" : "used at reset"
-  return `${shownPercent}% ${suffix}`
+  const suffix = displayMode === "left" ? "重設時剩餘" : "重設時已用"
+  return `預計${suffix} ${shownPercent}%`
 }
 
 export function formatDeficitText(
@@ -107,15 +108,15 @@ export function formatDeficitText(
 ): string | null {
   if (!Number.isFinite(deficit) || deficit <= 0) return null
 
-  const suffix = displayMode === "left" ? "short" : "in deficit"
+  const suffix = displayMode === "left" ? "不足" : "超出預期"
   if (format.kind === "percent") {
     const roundedPercent = Math.round(deficit)
-    return roundedPercent > 0 ? `${roundedPercent}% ${suffix}` : null
+    return roundedPercent > 0 ? `${suffix} ${roundedPercent}%` : null
   }
 
   const roundedToCents = Math.round(deficit * 100) / 100
   if (roundedToCents <= 0) return null
 
-  if (format.kind === "dollars") return `$${formatFixedPrecisionNumber(roundedToCents)} ${suffix}`
-  return `${formatCountNumber(roundedToCents)} ${format.suffix} ${suffix}`
+  if (format.kind === "dollars") return `${suffix} $${formatFixedPrecisionNumber(roundedToCents)}`
+  return `${suffix} ${formatCountNumber(roundedToCents)} ${countUnit(format.suffix)}`
 }

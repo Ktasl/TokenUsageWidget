@@ -1,5 +1,6 @@
 import { LazyStore } from "@tauri-apps/plugin-store";
 import type { PluginMeta } from "@/lib/plugin-types";
+import { IS_TEST_BUILD } from "@/lib/app-edition";
 
 // Refresh cooldown duration in milliseconds (5 minutes)
 export const REFRESH_COOLDOWN_MS = 300_000;
@@ -8,6 +9,7 @@ export const REFRESH_COOLDOWN_MS = 300_000;
 export type PluginSettings = {
   order: string[];
   disabled: string[];
+  menubarMetrics?: Record<string, string>;
 };
 
 export type AutoUpdateIntervalMinutes = 5 | 15 | 30 | 60;
@@ -20,7 +22,7 @@ export type ResetTimerDisplayMode = "relative" | "absolute";
 
 export type TimeFormatMode = "auto" | "12h" | "24h";
 
-export type MenubarIconStyle = "provider" | "bars" | "donut";
+export type MenubarIconStyle = "compact" | "quota" | "provider" | "bars" | "donut";
 
 export type MenubarMetric = "default" | "weekly";
 
@@ -49,7 +51,7 @@ export const DEFAULT_THEME_MODE: ThemeMode = "system";
 export const DEFAULT_DISPLAY_MODE: DisplayMode = "left";
 export const DEFAULT_RESET_TIMER_DISPLAY_MODE: ResetTimerDisplayMode = "relative";
 export const DEFAULT_TIME_FORMAT_MODE: TimeFormatMode = "auto";
-export const DEFAULT_MENUBAR_ICON_STYLE: MenubarIconStyle = "provider";
+export const DEFAULT_MENUBAR_ICON_STYLE: MenubarIconStyle = IS_TEST_BUILD ? "compact" : "provider";
 export const DEFAULT_MENUBAR_METRIC: MenubarMetric = "default";
 export const DEFAULT_GLOBAL_SHORTCUT: GlobalShortcut = null;
 export const DEFAULT_START_ON_LOGIN = false;
@@ -59,73 +61,90 @@ const THEME_MODES: ThemeMode[] = ["system", "light", "dark"];
 const DISPLAY_MODES: DisplayMode[] = ["used", "left"];
 const RESET_TIMER_DISPLAY_MODES: ResetTimerDisplayMode[] = ["relative", "absolute"];
 const TIME_FORMAT_MODES: TimeFormatMode[] = ["auto", "12h", "24h"];
-const MENUBAR_ICON_STYLES: MenubarIconStyle[] = ["provider", "donut", "bars"];
+const MENUBAR_ICON_STYLES: MenubarIconStyle[] = ["compact", "quota", "provider", "donut", "bars"];
 const MENUBAR_METRICS: MenubarMetric[] = ["default", "weekly"];
 
 export const MENUBAR_ICON_STYLE_OPTIONS: { value: MenubarIconStyle; label: string }[] = [
-  { value: "provider", label: "Plugin" },
-  { value: "donut", label: "Donut" },
-  { value: "bars", label: "Bars" },
+  { value: "compact", label: "圖示大字" },
+  { value: "quota", label: "雙額度與倒數" },
+  { value: "provider", label: "服務圖示" },
+  { value: "donut", label: "圓環" },
+  { value: "bars", label: "長條" },
 ];
 
 export const MENUBAR_METRIC_OPTIONS: { value: MenubarMetric; label: string }[] = [
-  { value: "default", label: "Default" },
-  { value: "weekly", label: "Weekly" },
+  { value: "default", label: "預設" },
+  { value: "weekly", label: "每週" },
 ];
 
 export const AUTO_UPDATE_OPTIONS: { value: AutoUpdateIntervalMinutes; label: string }[] =
   AUTO_UPDATE_INTERVALS.map((value) => ({
     value,
-    label: value === 60 ? "1 hour" : `${value} min`,
+    label: value === 60 ? "1小時" : `${value}分鐘`,
   }));
 
 export const THEME_OPTIONS: { value: ThemeMode; label: string }[] =
   THEME_MODES.map((value) => ({
     value,
-    label: value.charAt(0).toUpperCase() + value.slice(1),
+    label: { system: "跟隨系統", light: "淺色", dark: "深色" }[value],
   }));
 
 export const DISPLAY_MODE_OPTIONS: { value: DisplayMode; label: string }[] = [
-  { value: "left", label: "Left" },
-  { value: "used", label: "Used" },
+  { value: "left", label: "剩餘" },
+  { value: "used", label: "已用" },
 ];
 
 export const RESET_TIMER_DISPLAY_OPTIONS: { value: ResetTimerDisplayMode; label: string }[] = [
-  { value: "relative", label: "Relative" },
-  { value: "absolute", label: "Absolute" },
+  { value: "relative", label: "倒數" },
+  { value: "absolute", label: "日期時間" },
 ];
 
 export const TIME_FORMAT_OPTIONS: { value: TimeFormatMode; label: string }[] = [
-  { value: "auto", label: "Auto" },
-  { value: "12h", label: "12-hour" },
-  { value: "24h", label: "24-hour" },
+  { value: "auto", label: "自動" },
+  { value: "12h", label: "12小時制" },
+  { value: "24h", label: "24小時制" },
 ];
 
 const store = new LazyStore(SETTINGS_STORE_PATH);
 
-const DEFAULT_ENABLED_PLUGINS = new Set(["claude", "codex", "cursor"]);
+const DEFAULT_ENABLED_PLUGINS = new Set(IS_TEST_BUILD ? [] : ["claude", "codex", "cursor"]);
 
 export const DEFAULT_PLUGIN_SETTINGS: PluginSettings = {
   order: [],
   disabled: [],
 };
 
+function validMenubarMetrics(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value).filter(([, label]) => typeof label === "string" && label.trim().length > 0);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 export async function loadPluginSettings(): Promise<PluginSettings> {
   const stored = await store.get<PluginSettings>(PLUGIN_SETTINGS_KEY);
   if (!stored) return { ...DEFAULT_PLUGIN_SETTINGS };
+  const metrics = validMenubarMetrics(stored.menubarMetrics);
   return {
     order: Array.isArray(stored.order) ? stored.order : [],
     disabled: Array.isArray(stored.disabled) ? stored.disabled : [],
+    ...(metrics ? { menubarMetrics: metrics } : {}),
   };
 }
 
 export async function savePluginSettings(settings: PluginSettings): Promise<void> {
-  await store.set(PLUGIN_SETTINGS_KEY, settings);
+  const { menubarMetrics, ...base } = settings;
+  const metrics = validMenubarMetrics(menubarMetrics);
+  await store.set(PLUGIN_SETTINGS_KEY, { ...base, ...(metrics ? { menubarMetrics: metrics } : {}) });
   await store.save();
 }
 
 // TODO(remove after 2026-09-01): One-time Windsurf -> Devin settings migration.
 export function migrateWindsurfToDevin(settings: PluginSettings): PluginSettings {
+  const metrics = validMenubarMetrics(settings.menubarMetrics);
+  if (metrics?.windsurf) {
+    if (!metrics.devin) metrics.devin = metrics.windsurf;
+    delete metrics.windsurf;
+  }
   const hasDevin = settings.order.includes("devin");
   const hasWindsurf = settings.order.includes("windsurf");
   const windsurfWasDisabled = settings.disabled.includes("windsurf");
@@ -145,6 +164,7 @@ export function migrateWindsurfToDevin(settings: PluginSettings): PluginSettings
   return {
     order,
     disabled: Array.from(new Set(disabled)),
+    ...(metrics ? { menubarMetrics: metrics } : {}),
   };
 }
 
@@ -197,7 +217,10 @@ export function normalizePluginSettings(
       disabled.push(id);
     }
   }
-  return { order, disabled };
+  const metrics = validMenubarMetrics(Object.fromEntries(
+    Object.entries(settings.menubarMetrics ?? {}).filter(([id]) => knownSet.has(id))
+  ));
+  return { order, disabled, ...(metrics ? { menubarMetrics: metrics } : {}) };
 }
 
 export function arePluginSettingsEqual(
@@ -212,7 +235,10 @@ export function arePluginSettingsEqual(
   for (let i = 0; i < a.disabled.length; i += 1) {
     if (a.disabled[i] !== b.disabled[i]) return false;
   }
-  return true;
+  const aMetrics = validMenubarMetrics(a.menubarMetrics) ?? {};
+  const bMetrics = validMenubarMetrics(b.menubarMetrics) ?? {};
+  if (Object.keys(aMetrics).length !== Object.keys(bMetrics).length) return false;
+  return Object.entries(aMetrics).every(([id, label]) => bMetrics[id] === label);
 }
 
 function isThemeMode(value: unknown): value is ThemeMode {

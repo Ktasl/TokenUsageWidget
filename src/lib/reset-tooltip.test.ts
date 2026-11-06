@@ -20,29 +20,29 @@ describe("reset-tooltip", () => {
 
   it("formats relative reset labels", () => {
     const nowMs = Date.parse("2026-02-03T11:29:00.000Z")
-    expect(formatResetRelativeLabel(nowMs, "2026-02-03T12:34:00.000Z")).toBe("Resets in 1h 5m")
+    expect(formatResetRelativeLabel(nowMs, "2026-02-03T12:34:00.000Z")).toBe("1 小時 5 分後重設")
   })
 
   it("formats absolute reset labels with same-day context", () => {
     const nowMs = new Date(2026, 1, 3, 0, 0, 0).getTime()
     const resetsAtIso = new Date(2026, 1, 3, 12, 34, 0).toISOString()
-    const timeText = new Intl.DateTimeFormat(undefined, {
+    const timeText = new Intl.DateTimeFormat("zh-TW", {
       hour: "numeric",
       minute: "2-digit",
     }).format(Date.parse(resetsAtIso))
 
-    expect(formatResetAbsoluteLabel(nowMs, resetsAtIso)).toBe(`Resets today at ${timeText}`)
+    expect(formatResetAbsoluteLabel(nowMs, resetsAtIso)).toBe(`今天 ${timeText} 重設`)
   })
 
   it("formats absolute reset labels with tomorrow context", () => {
     const nowMs = new Date(2026, 1, 3, 22, 0, 0).getTime()
     const resetsAtIso = new Date(2026, 1, 4, 8, 15, 0).toISOString()
-    const timeText = new Intl.DateTimeFormat(undefined, {
+    const timeText = new Intl.DateTimeFormat("zh-TW", {
       hour: "numeric",
       minute: "2-digit",
     }).format(Date.parse(resetsAtIso))
 
-    expect(formatResetAbsoluteLabel(nowMs, resetsAtIso)).toBe(`Resets tomorrow at ${timeText}`)
+    expect(formatResetAbsoluteLabel(nowMs, resetsAtIso)).toBe(`明天 ${timeText} 重設`)
   })
 
   it("formats absolute reset labels with locale-aware month-day context", () => {
@@ -55,7 +55,7 @@ describe("reset-tooltip", () => {
     ]
 
     for (const resetsAtIso of cases) {
-      const dateText = new Intl.DateTimeFormat(undefined, {
+      const dateText = new Intl.DateTimeFormat("zh-TW", {
         month: "short",
         day: "numeric",
       }).format(Date.parse(resetsAtIso))
@@ -67,7 +67,7 @@ describe("reset-tooltip", () => {
   it("shows absolute tooltip text when the visible mode is relative", () => {
     const nowMs = new Date(2026, 1, 3, 0, 0, 0).getTime()
     const resetsAtIso = new Date(2026, 1, 3, 12, 34, 0).toISOString()
-    const timeText = new Intl.DateTimeFormat(undefined, {
+    const timeText = new Intl.DateTimeFormat("zh-TW", {
       hour: "numeric",
       minute: "2-digit",
     }).format(Date.parse(resetsAtIso))
@@ -78,7 +78,7 @@ describe("reset-tooltip", () => {
         resetsAtIso,
         visibleMode: "relative",
       })
-    ).toBe(`Resets today at ${timeText}`)
+    ).toBe(`今天 ${timeText} 重設`)
   })
 
   it("shows relative tooltip text when the visible mode is absolute", () => {
@@ -90,7 +90,7 @@ describe("reset-tooltip", () => {
         resetsAtIso: "2026-02-03T12:34:00.000Z",
         visibleMode: "absolute",
       })
-    ).toBe("Resets in 1h 5m")
+    ).toBe("1 小時 5 分後重設")
   })
 
   it("formats absolute reset labels differently for 12h vs 24h", () => {
@@ -100,8 +100,8 @@ describe("reset-tooltip", () => {
     const expected12 = getTimeFormatter("12h").format(resetsAtMs)
     const expected24 = getTimeFormatter("24h").format(resetsAtMs)
 
-    expect(formatResetAbsoluteLabel(nowMs, resetsAtIso, "12h")).toBe(`Resets today at ${expected12}`)
-    expect(formatResetAbsoluteLabel(nowMs, resetsAtIso, "24h")).toBe(`Resets today at ${expected24}`)
+    expect(formatResetAbsoluteLabel(nowMs, resetsAtIso, "12h")).toBe(`今天 ${expected12} 重設`)
+    expect(formatResetAbsoluteLabel(nowMs, resetsAtIso, "24h")).toBe(`今天 ${expected24} 重設`)
     // Sanity: the two formats differ at this hour.
     expect(expected12).not.toBe(expected24)
   })
@@ -119,6 +119,6 @@ describe("reset-tooltip", () => {
         visibleMode: "relative",
         timeFormatMode: "24h",
       })
-    ).toBe(`Resets today at ${expected24}`)
+    ).toBe(`今天 ${expected24} 重設`)
   })
 })

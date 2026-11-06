@@ -7,6 +7,7 @@ import {
 import { useProbeAutoUpdate } from "@/hooks/app/use-probe-auto-update"
 import { useProbeRefreshActions } from "@/hooks/app/use-probe-refresh-actions"
 import { useProbeState } from "@/hooks/app/use-probe-state"
+import { useNativeBackground } from "@/hooks/app/use-native-background"
 
 type UseProbeArgs = {
   pluginSettings: PluginSettings | null
@@ -19,6 +20,7 @@ export function useProbe({
   autoUpdateInterval,
   onProbeResult,
 }: UseProbeArgs) {
+  const nativeBackground = useNativeBackground(pluginSettings, autoUpdateInterval)
   const {
     pluginStates,
     pluginStatesRef,
@@ -51,6 +53,7 @@ export function useProbe({
     setErrorForPlugins,
     isPluginLoading,
     startBatch,
+    nativeBackgroundReady: nativeBackground.ready,
   })
 
   const { handleRetryPlugin, handleRefreshAll } = useProbeRefreshActions({
@@ -72,5 +75,6 @@ export function useProbe({
     setAutoUpdateNextAt,
     handleRetryPlugin,
     handleRefreshAll,
+    backgroundError: nativeBackground.error,
   }
 }
