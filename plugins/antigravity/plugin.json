@@ -9,6 +9,7 @@
   "lines": [
     { "type": "progress", "label": "Gemini Pro", "scope": "overview", "primaryOrder": 1 },
     { "type": "progress", "label": "Gemini Flash", "scope": "overview" },
-    { "type": "progress", "label": "Claude", "scope": "overview" }
+    { "type": "progress", "label": "Claude", "scope": "overview" },
+    { "type": "progress", "label": "Gemini 4 Argon", "scope": "overview" }
   ]
 }

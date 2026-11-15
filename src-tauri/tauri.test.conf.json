@@ -4,7 +4,7 @@
   "mainBinaryName": "tokenusagewidget",
   "identifier": "io.github.ktasl.tokenusagewidget.test",
   "build": {
-    "beforeBuildCommand": "bun run bundle:plugins && VITE_TOKEN_USAGE_TEST_BUILD=1 VITE_TOKEN_USAGE_BUILD_NUMBER=20261106.1 bun run build"
+    "beforeBuildCommand": "bun run bundle:plugins && VITE_TOKEN_USAGE_TEST_BUILD=1 VITE_TOKEN_USAGE_BUILD_NUMBER=20261115.1 bun run build"
   },
   "app": {
     "windows": [
@@ -55,7 +55,7 @@
     "macOS": {
       "minimumSystemVersion": "13.0",
       "signingIdentity": "-",
-      "bundleVersion": "20261106.1"
+      "bundleVersion": "20261115.1"
     },
     "resources": [
       "resources/bundled_plugins/**/*",

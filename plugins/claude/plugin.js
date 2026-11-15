@@ -1028,6 +1028,22 @@
           periodDurationMs: 7 * 24 * 60 * 60 * 1000 // 7 days
         }))
       }
+      if (Array.isArray(data.limits)) {
+        for (const limit of data.limits) {
+          if (!limit || typeof limit !== "object" || limit.kind !== "weekly_scoped") continue
+          const modelName = limit.scope && limit.scope.model && limit.scope.model.display_name
+          if (typeof modelName !== "string" || !/fable/i.test(modelName)) continue
+          if (!Number.isFinite(limit.percent) || limit.percent < 0 || limit.percent > 100) continue
+          lines.push(ctx.line.progress({
+            label: "Weekly · " + modelName.trim(),
+            used: limit.percent,
+            limit: 100,
+            format: { kind: "percent" },
+            resetsAt: ctx.util.toIso(limit.resets_at),
+            periodDurationMs: 7 * 24 * 60 * 60 * 1000 // 7 days
+          }))
+        }
+      }
 
       if (data.extra_usage && data.extra_usage.is_enabled) {
         const used = data.extra_usage.used_credits

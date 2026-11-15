@@ -1,6 +1,6 @@
 # TokenUsageWidget
 
-## 20261106.1 測試版
+## 20261115.1 測試版
 
 本版整理目前 macOS 13 Intel 測試分支的選單列顯示、背景更新、用量統計與匯出改動。安裝檔採本機臨時簽署，需手動安裝；它不使用 OpenUsage 的自動更新或正式版發布流程。實際帳戶、睡眠恢復及選單列操作仍須在目標電腦確認。
 
@@ -86,6 +86,7 @@ CSV／唯讀 JSON 從總覽匯出到「下載／TokenUsageWidget」，檔名含�
 
 - Claude 與 Codex 各顯示兩行：S 是 Session，W 是 Weekly；數字固定代表剩餘百分比，旁邊是該欄位自己的重設倒數。倒數依來源時間，沒有把兩個週期互相替代。
 - Antigravity 顯示兩行並列資訊：G 是 Gemini，C 是 Claude。預設用 Gemini Pro，缺少時可用 Gemini Flash；「服務與模型」選 Gemini Flash 時以 Flash 為準。Gemini 不使用 Claude 的額度補值，Claude 也不使用 Gemini。兩個模型不相加。
+- 點開總覽後，Claude 卡片會在來源提供時另列「Weekly · Fable」；Antigravity 卡片會把 Gemini 4 Argon 獨立列出，不併入 Gemini Pro／Flash 或 Claude。這兩項不改選單列雙額度樣式的兩行摘要。
 - 其他已啟用服務沿用其可用額度及既有模型選擇；舊三種樣式與選單列主要入口保留。內容多時可回到較簡潔的舊樣式。
 - 缺額度、查詢失敗、超過10分鐘或重設已過時顯示待更新；明確的零和100%仍照實顯示。只有重設時間缺少時保留已知百分比，倒數顯示 `--`。Antigravity 來源缺欄位不再當成剩餘零。
 

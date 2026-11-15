@@ -92,6 +92,11 @@ POST http://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/GetUse
           }
         },
         {
+          "label": "Gemini 4 Argon (High)",
+          "modelOrAlias": { "model": "<model id from Antigravity>" },
+          "quotaInfo": { "remainingFraction": 1, "resetTime": "..." }
+        },
+        {
           "label": "Claude Sonnet 4.5",
           "quotaInfo": { "remainingFraction": 1, "resetTime": "..." }
         },
@@ -154,6 +159,7 @@ POST http://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/GetCom
 | GPT-OSS 120B (Medium) | 342 | OpenAI (proxied) |
 
 Models are dynamic — the list changes as Google adds/removes them. The plugin reads labels from the response, not a hardcoded list.
+Gemini 4 Argon High/Medium/Low variants are grouped into one `Gemini 4 Argon` quota line, using the lowest remaining fraction returned for that model family.
 
 Interestingly, non-Google models (Claude, GPT-OSS) are proxied through Codeium/Windsurf infrastructure — Antigravity uses the same language server binary as Windsurf. The `GetUserStatus` response also includes `monthlyPromptCredits`, `monthlyFlowCredits`, and `monthlyFlexCreditPurchaseAmount` fields inherited from the Windsurf credit system, but these appear to be completely irrelevant to Antigravity's quota model which is purely fraction-based per model.
 
@@ -233,6 +239,7 @@ For `agy`, OpenUsage calls:
 
 1. `POST /v1internal:loadCodeAssist`
 2. `POST /v1internal:retrieveUserQuota`
+3. `POST /v1internal:fetchAvailableModels` to resolve quota model IDs to display names
 
 #### Response
 
@@ -254,7 +261,7 @@ For `agy`, OpenUsage calls:
 
 Returns 401/403 if the token is invalid or expired — triggers reactive refresh.
 
-The response includes all models provisioned for the account. The plugin filters out non-user-facing models using three layers: (1) `isInternal: true` flag from the API, (2) empty `displayName` (catches internal autocomplete models like `chat_20706`, `tab_flash_lite_preview`), and (3) a model-ID blacklist (catches Gemini 2.5 variants and placeholders).
+The response includes all models provisioned for the account. The plugin filters out non-user-facing models using three layers: (1) `isInternal: true` flag from the API, (2) empty `displayName` (catches internal autocomplete models like `chat_20706`, `tab_flash_lite_preview`), and (3) a model-ID blacklist (catches Gemini 2.5 variants and placeholders). The resolved Gemini 4 Argon quota is shown separately from the Gemini Pro/Flash and Claude quota pools.
 
 The Cloud Code model set is a superset of the LS model set. The LS returns only cascade-configured chat models, Cloud Code includes all provisioned models. This difference is expected.
 
@@ -265,5 +272,5 @@ The Cloud Code model set is a superset of the LS model set. The LS returns only 
 3. Read SQLite token candidates from both Antigravity state DB paths.
 4. Try unexpired SQLite/cached access tokens with `fetchAvailableModels`.
 5. Refresh SQLite refresh tokens only after auth failure or when no access token exists.
-6. Read `agy` keychain token from service `gemini`, account `antigravity`, then call `loadCodeAssist` and `retrieveUserQuota`.
+6. Read `agy` keychain token from service `gemini`, account `antigravity`, then call `loadCodeAssist`, `retrieveUserQuota`, and `fetchAvailableModels`.
 7. If all strategies fail: error "Start Antigravity or run `agy` and try again."

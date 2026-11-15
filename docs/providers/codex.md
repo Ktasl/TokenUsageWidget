@@ -63,6 +63,11 @@ Returns rate limit windows, optional credits, and available on-demand rate limit
 
 Both rate_limit windows are enforced simultaneously — hitting either limit throttles the user.
 
+The plugin accepts this legacy snake_case response and the Codex account-rate-limit snapshot shape
+(`rateLimits`, `rateLimitsByLimitId`, `primary`, `secondary`, `usedPercent`, `resetsAt`). When a
+`rateLimitsByLimitId.codex` bucket is present, its windows and plan are used. A `free` plan is handled
+the same way as other plans; the quota rows appear whenever the response includes those windows.
+
 OpenUsage floors the remaining credit balance to a whole number and displays its fixed USD
 equivalent at `$0.04` per credit. For example, `820.6969075` renders as
 `$32.80 · 820 credits`. The credit balance is unbounded; the API does not provide a maximum.

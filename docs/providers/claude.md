@@ -48,6 +48,14 @@ Returns rate limit windows and optional extra credits.
     "utilization": 0,
     "resets_at": "2026-02-01T00:00:00Z"
   },
+  "limits": [                       // optional scoped limits; model names come from the response
+    {
+      "kind": "weekly_scoped",
+      "percent": 18,                // % used in this model-scoped weekly window
+      "resets_at": "2026-02-01T00:00:00Z",
+      "scope": { "model": { "display_name": "Fable" } }
+    }
+  ],
   "extra_usage": {                  // on-demand overage credits (optional)
     "is_enabled": true,
     "used_credits": 500,            // cents spent
@@ -58,6 +66,7 @@ Returns rate limit windows and optional extra credits.
 ```
 
 All windows are enforced simultaneously — hitting any limit throttles the user.
+When `limits` contains a `weekly_scoped` row whose model name includes Fable, the plugin shows it as a separate weekly progress line. It does not infer a zero when the row is absent.
 
 ## Authentication
 

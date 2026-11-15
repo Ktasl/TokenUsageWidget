@@ -365,6 +365,7 @@
 
   function poolLabel(normalizedLabel) {
     var lower = normalizedLabel.toLowerCase()
+    if (lower.indexOf("gemini") !== -1 && lower.indexOf("argon") !== -1) return "Gemini 4 Argon"
     if (lower.indexOf("gemini") !== -1 && lower.indexOf("pro") !== -1) return "Gemini Pro"
     if (lower.indexOf("gemini") !== -1 && lower.indexOf("flash") !== -1) return "Gemini Flash"
     // All non-Gemini models (Claude, GPT-OSS, etc.) share a single quota pool
@@ -375,6 +376,7 @@
     var lower = label.toLowerCase()
     // Gemini Pro variants first, then other Gemini, then Claude Opus, then other Claude, then rest
     if (lower.indexOf("gemini") !== -1 && lower.indexOf("pro") !== -1) return "0a_" + label
+    if (lower.indexOf("gemini") !== -1 && lower.indexOf("argon") !== -1) return "0c_" + label
     if (lower.indexOf("gemini") !== -1) return "0b_" + label
     if (lower.indexOf("claude") !== -1 && lower.indexOf("opus") !== -1) return "1a_" + label
     if (lower.indexOf("claude") !== -1) return "1b_" + label
@@ -505,6 +507,7 @@
       var frac = qi ? qi.remainingFraction : undefined
       var rtime = (qi && qi.resetTime) || undefined
       configs.push({
+        modelId: modelId,
         label: displayName,
         quotaInfo: { remainingFraction: frac, resetTime: rtime },
       })
@@ -559,7 +562,18 @@
     }
     if (!quotaData || quotaData._authFailed) return quotaData
 
-    var lines = buildModelLines(ctx, parseAgyQuotaBuckets(quotaData))
+    var modelNames = {}
+    var modelData = requestCloudCodeJson(ctx, FETCH_MODELS_PATH, token, "agy", {})
+    var modelConfigs = parseCloudCodeModels(modelData)
+    for (var i = 0; i < modelConfigs.length; i++) {
+      if (modelConfigs[i].modelId) modelNames[modelConfigs[i].modelId] = modelConfigs[i].label
+    }
+
+    var quotaConfigs = parseAgyQuotaBuckets(quotaData)
+    for (var i = 0; i < quotaConfigs.length; i++) {
+      if (modelNames[quotaConfigs[i].label]) quotaConfigs[i].label = modelNames[quotaConfigs[i].label]
+    }
+    var lines = buildModelLines(ctx, quotaConfigs)
     if (lines.length === 0) return null
     return { plan: readAgyPlan(loadData), lines: lines }
   }
